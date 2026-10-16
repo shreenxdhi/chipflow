@@ -3,6 +3,8 @@
 import json
 import os
 import re
+import shutil
+import time
 from pathlib import Path
 
 import yaml
@@ -12,8 +14,9 @@ ARTIFACTS = Path(os.environ.get("CHIPFLOW_TEST_ARTIFACTS", ".chipflow/browser-te
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
 
 with sync_playwright() as p:
+    executable = os.environ.get("CHIPFLOW_BROWSER") or shutil.which("google-chrome")
     browser = p.chromium.launch(
-        executable_path=os.environ.get("CHIPFLOW_BROWSER", "/usr/bin/google-chrome"),
+        **({"executable_path": executable} if executable else {}),
         headless=True,
         args=["--no-sandbox"],
     )
@@ -25,6 +28,20 @@ with sync_playwright() as p:
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(os.environ.get("CHIPFLOW_URL", "http://127.0.0.1:8087"))
     expect(page.locator("#connection")).to_have_text("● Local workspace")
+    example = Path(page.request.get("/api/workspace").json()["example"])
+    # Seed independent history so the smoke test also works in a fresh workspace.
+    seeded = page.request.post("/api/runs", data={"config": str(example), "target": "sim"})
+    assert seeded.status == 202, seeded.text()
+    seed_id = seeded.json()["id"]
+    deadline = time.monotonic() + 60
+    while page.request.get(f"/api/runs/{seed_id}").json()["status"] not in {
+        "completed",
+        "failed",
+        "interrupted",
+    }:
+        assert time.monotonic() < deadline, "Example simulation did not finish"
+        time.sleep(0.1)
+    assert page.request.get(f"/api/runs/{seed_id}").json()["status"] == "completed"
     page.get_by_role("button", name="Getting started").click()
     expect(page.locator("#help-dialog")).to_be_visible()
     page.keyboard.press("Escape")
@@ -47,8 +64,8 @@ with sync_playwright() as p:
     page.get_by_role("button", name="Create project", exact=False).click()
     page.locator("#p-name").fill("friendly_counter")
     page.locator("#p-top").fill("counter")
-    page.locator("#p-rtl").fill("examples/counter/counter.v")
-    page.locator("#p-tb").fill("examples/counter/tb.v")
+    page.locator("#p-rtl").fill(str(example.parent / "counter.v"))
+    page.locator("#p-tb").fill(str(example.parent / "tb.v"))
     page.locator("#p-simtop").fill("tb")
     page.locator("#p-marker").fill("PASS: counter self-check")
     page.get_by_role("button", name="Save project", exact=True).click()
@@ -74,6 +91,23 @@ with sync_playwright() as p:
     page.get_by_role("searchbox", name="Find in logs").fill("PASS")
     expect(page.locator("#log-output")).to_contain_text("PASS: counter self-check")
     assert "$ iverilog" not in page.locator("#log-output").inner_text()
+    page.get_by_role("checkbox", name="Follow output").uncheck()
+    frozen = page.locator("#log-output").inner_text()
+    config_snapshot = page.request.get(f"/api/runs/{run_id}/artifacts/project.json").json()
+    run_folder = next(
+        parent for parent in Path(config_snapshot["rtl"][0]).parents if parent.name == run_id
+    )
+    with (run_folder / "console.log").open("a") as stream:
+        stream.write("PASS: live output appended during pause\n")
+    page.wait_for_timeout(1500)
+    assert page.locator("#log-output").inner_text() == frozen
+    page.get_by_role("checkbox", name="Follow output").check()
+    expect(page.locator("#log-output")).to_contain_text("live output appended during pause")
+    with (run_folder / "console.log").open("a") as stream:
+        stream.write(("PASS bounded log output " + "x" * 80 + "\n") * 25000)
+    expect(page.locator("#log-count")).to_contain_text("Showing recent output", timeout=30000)
+    assert len(page.locator("#log-output").inner_text()) <= 2 * 1024 * 1024
+    assert (run_folder / "console.log").stat().st_size > 2 * 1024 * 1024
     page.get_by_role("tab", name="Files", exact=True).click()
     page.get_by_role("searchbox", name="Search output files").fill(".vcd")
     expect(page.locator(".artifacts")).to_contain_text("Waveform")
@@ -135,8 +169,15 @@ with sync_playwright() as p:
         expect(page.locator(".download-grid")).to_contain_text("Final layout")
     page.get_by_role("button", name="Try the counter example").click()
     page.locator("#target").select_option("finish")
+    physical = page.request.post(
+        "/api/projects/inspect", data={"config": str(example), "target": "finish"}
+    ).json()
     page.get_by_role("button", name="Check project", exact=True).click()
-    expect(page.locator("#preflight")).to_contain_text("counter_demo is ready")
+    if physical["ready"]:
+        expect(page.locator("#preflight")).to_contain_text("counter_demo is ready")
+    else:
+        expect(page.locator("#preflight")).to_contain_text("A few things need fixing first")
+        expect(page.locator("#preflight")).to_contain_text(physical["issues"][0])
     page.get_by_role("button", name="Dismiss notification").click()
     page.evaluate("scrollTo(0, 0)")
     page.screenshot(path=str(ARTIFACTS / "dashboard.png"), full_page=True)

@@ -13,6 +13,8 @@ const stages = {
 };
 const statusNames = {queued: 'Starting', running: 'In progress', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted'};
 let selected = null, offset = 0, logText = '', tab = 'overview', lastState = '', busy = false;
+const logLimit = 2 * 1024 * 1024;
+let logTrimmed = false, pausedLogText = null;
 let runs = [], projects = [], environment = null, historyKey = '', filesCache = new Map();
 let logQuery = '', fileQuery = '', followLogs = true, editorBase = null, starting = false;
 const checked = new Set(), cancelling = new Set();
@@ -97,7 +99,7 @@ function number(value) {
 }
 function select(id) {
   if (selected === id) return;
-  selected = id; offset = 0; logText = ''; lastState = ''; tab = 'overview';
+  selected = id; offset = 0; logText = ''; logTrimmed = false; pausedLogText = null; lastState = ''; tab = 'overview';
   logQuery = ''; fileQuery = ''; followLogs = true;
   try { localStorage.setItem('chipflow.selected', id); } catch {}
   updateLocation();
@@ -267,9 +269,11 @@ async function copyText(text) {
 function renderLogText() {
   const pre = $('#log-output'); if (!pre) return;
   const query = logQuery.toLowerCase();
-  pre.textContent = (query ? logText.split('\n').filter(line => line.toLowerCase().includes(query)).join('\n') : logText) || (query ? 'No matching log lines.' : 'Preparing tools and waiting for output…');
+  const text = !followLogs && pausedLogText !== null ? pausedLogText : logText;
+  const rendered = (query ? text.split('\n').filter(line => line.toLowerCase().includes(query)).join('\n') : text) || (query ? 'No matching log lines.' : 'Preparing tools and waiting for output…');
+  if (pre.textContent !== rendered) pre.textContent = rendered;
   if (followLogs) pre.scrollTop = pre.scrollHeight;
-  const count = $('#log-count'); if (count) count.textContent = query ? `${pre.textContent === 'No matching log lines.' ? 0 : pre.textContent.split('\n').length} matching lines` : 'Updates automatically';
+  const count = $('#log-count'); if (count) count.textContent = (query ? `${pre.textContent === 'No matching log lines.' ? 0 : pre.textContent.split('\n').length} matching lines` : 'Updates automatically') + (logTrimmed ? ' · Showing recent output; download the full log to search earlier lines.' : '');
 }
 function logsPanel(panel, run) {
   if (!$('#log-output')) {
@@ -277,11 +281,11 @@ function logsPanel(panel, run) {
     const search = node('input'); search.type = 'search'; search.id = 'log-search'; search.placeholder = 'Find in logs…'; search.setAttribute('aria-label', 'Find in logs'); search.value = logQuery;
     search.oninput = () => { logQuery = search.value; renderLogText(); };
     const follow = node('label', undefined, 'checkbox-label'); const check = node('input'); check.type = 'checkbox'; check.checked = followLogs;
-    check.onchange = () => { followLogs = check.checked; renderLogText(); }; follow.append(check, node('span', 'Follow output'));
+    check.onchange = () => { followLogs = check.checked; pausedLogText = followLogs ? null : logText; renderLogText(); }; follow.append(check, node('span', 'Follow output'));
     const file = {path: 'console.log'}; const download = artifactLink(run, file, '↓ Download log');
     tools.append(search, follow, download);
     const pre = node('pre'); pre.id = 'log-output'; pre.tabIndex = 0; pre.setAttribute('aria-label', 'Run log output');
-    pre.onscroll = () => { if (pre.scrollHeight - pre.scrollTop - pre.clientHeight > 100 && followLogs) { followLogs = false; check.checked = false; } };
+    pre.onscroll = () => { if (pre.scrollHeight - pre.scrollTop - pre.clientHeight > 100 && followLogs) { followLogs = false; pausedLogText = logText; check.checked = false; } };
     panel.append(tools, node('small', '', 'muted'), pre); panel.querySelector('small').id = 'log-count';
   }
   renderLogText();
@@ -347,7 +351,9 @@ async function refresh() {
       const id = selected, run = runs.find(item => item.id === id);
       const logs = await api(`/api/runs/${id}/logs?offset=${offset}`);
       if (selected !== id) return;
+      if (logs.offset < offset) { logText = ''; logTrimmed = false; }
       logText += logs.text; offset = logs.offset;
+      if (logText.length > logLimit) { const tail = logText.slice(-logLimit); const newline = tail.indexOf('\n'); logText = newline >= 0 ? tail.slice(newline + 1) : tail; logTrimmed = true; }
       const key = JSON.stringify(run) + tab;
       if (key !== lastState) { renderDetail(run); lastState = key; }
       await renderTab(run);

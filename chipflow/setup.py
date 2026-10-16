@@ -84,6 +84,7 @@ def assess(
     for name, args in TOOL_ARGS.items():
         path = find_tool(name, effective_dirs)
         version = None
+        problem = None
         if path and versions:
             try:
                 process = subprocess.run(
@@ -95,21 +96,30 @@ def assess(
                 )
                 output = (process.stdout + process.stderr).strip()
                 version = output.splitlines()[0] if output else f"exit {process.returncode}"
+                if process.returncode:
+                    problem = f"Version probe exited {process.returncode}: {version}"
             except (OSError, subprocess.TimeoutExpired) as exc:
                 version = f"Could not probe version: {exc}"
+                problem = version
         tools[name] = {
             "path": path,
             "version": version,
             "required": name in required,
             "source": SOURCES[name],
+            "probe_error": problem,
         }
         if name in required:
             checks.append(
                 {
                     "name": name,
-                    "status": "available" if path else "missing",
-                    "detail": path or "Executable not found",
-                    "action": "" if path else install_hint(name, host),
+                    "status": "broken" if problem else "available" if path else "missing",
+                    "detail": problem or path or "Executable not found",
+                    "action": "Repair the executable or its shared libraries, then rerun chipflow setup. "
+                    + install_hint(name, host)
+                    if problem
+                    else ""
+                    if path
+                    else install_hint(name, host),
                     "source": SOURCES[name],
                 }
             )

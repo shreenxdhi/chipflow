@@ -19,11 +19,21 @@ python3 -m venv .venv
 .venv/bin/pip-audit -r requirements-runtime.txt --no-deps --disable-pip
 ```
 
-CI runs Python 3.11–3.14, native simulation/PTY tests, distribution checks, and an
+CI runs Python 3.11–3.14 on Ubuntu 22.04/24.04, native simulation/PTY tests, crash
+recovery and backup/restore, browser interaction, clean-container installation,
+distribution checks, and an
 installed-wheel smoke test outside the repository. The clean-container Dockerfile
 is installation validation, not a Docker execution backend for user projects.
 Only a reviewed, tested version should be tagged. Keep `chipflow.__version__`,
 CHANGELOG, tag, wheel, and source distribution consistent.
+
+For stable releases also run the Nangate45 counter and Sky130 DMA physical
+acceptance flows with the documented native toolchain, confirm expected output
+hashes and timing/router metrics, back up and restore real history, and verify the
+published Homebrew formula by installing it. Keep evidence in the validation
+document. Do not retag or replace published archives; publish a new version for
+corrections. Stable status describes the supported operations contract, not
+foundry signoff or arbitrary EDA/PDK compatibility.
 
 ## GitHub and PyPI
 
@@ -56,7 +66,7 @@ The tap layout is in `packaging/homebrew`. Generate the formula from the **exact
 source archive attached to the GitHub release:
 
 ```sh
-.venv/bin/python scripts/generate_formula.py --sdist dist/chipflow-0.1.0.tar.gz
+.venv/bin/python scripts/generate_formula.py --sdist dist/chipflow-1.0.0.tar.gz
 ruby -c packaging/homebrew/Formula/chipflow.rb
 ```
 

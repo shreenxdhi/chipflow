@@ -1,0 +1,24 @@
+name: Dependency audit
+on:
+  schedule:
+    - cron: '25 6 * * 1'
+  workflow_dispatch:
+  push:
+    paths: ['requirements-runtime.txt', '.github/workflows/audit.yml']
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - run: python -m pip install 'pip-audit>=2,<3'
+      - run: pip-audit -r requirements-runtime.txt --no-deps --disable-pip --format cyclonedx-json --output dependency-sbom.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: dependency-sbom
+          path: dependency-sbom.json

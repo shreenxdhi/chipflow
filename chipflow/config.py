@@ -94,6 +94,14 @@ class Project(Strict):
             "IO_PLACER_V",
         }
         for key, value in values.items():
+            if key == "ADDER_MAP_FILE":
+                if (
+                    not isinstance(value, str)
+                    or value
+                    and not re.fullmatch(r"[A-Za-z0-9_./~+\-]+", value)
+                ):
+                    raise ValueError("ADDER_MAP_FILE must be a safe file path")
+                continue
             if key not in allowed or not re.fullmatch(r"[A-Za-z0-9_. +\-]*", str(value)):
                 raise ValueError(f"unsupported or unsafe physical setting: {key}")
         return values

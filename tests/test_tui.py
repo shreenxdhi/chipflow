@@ -302,7 +302,8 @@ def test_real_terminal_starts_simulation_and_worker_survives_exit(
         terminal.send("n")
         terminal.expect("START A RUN")
         terminal.send("\x15" + str(path) + "\n")
-        terminal.expect("Started terminal_launch", timeout=15)
+        # Curses may retain the leading S from the previous setup message.
+        terminal.expect("terminal_launch. This run continues", timeout=15)
         active = next(r for r in terminal_store.history() if r["name"] == "terminal_launch")
         assert active["status"] in {"queued", "running"}
         terminal.send("q")

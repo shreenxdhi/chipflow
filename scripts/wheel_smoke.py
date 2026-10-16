@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -51,7 +52,7 @@ def main():
                 check=check,
             )
 
-        assert "chipflow 0." in run("--version").stdout
+        assert re.fullmatch(r"chipflow \d+\.\d+\.\d+\n", run("--version").stdout)
         run("init", "demo")
         assert (workspace / "demo" / "counter.v").is_file()
         setup = run("setup", "--target", "sim", "--json", check=False)

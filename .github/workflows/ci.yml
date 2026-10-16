@@ -9,10 +9,11 @@ concurrency:
   cancel-in-progress: true
 jobs:
   tests:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: ['ubuntu-22.04', 'ubuntu-24.04']
         python: ['3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -20,7 +21,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: sudo apt-get update && sudo apt-get install -y iverilog make
-      - run: python -m pip install -e '.[test]'
+      - run: python -m pip install --constraint requirements-runtime.txt -e '.[test]'
       - run: python -m pytest -q
       - run: node --check chipflow/static/app.js
   distribution:
@@ -31,7 +32,7 @@ jobs:
         with:
           python-version: '3.14'
       - run: sudo apt-get update && sudo apt-get install -y iverilog make
-      - run: python -m pip install -e '.[test,dev]'
+      - run: python -m pip install --constraint requirements-runtime.txt -e '.[test,dev]'
       - run: ruff check chipflow tests scripts
       - run: ruff format --check chipflow tests scripts
       - run: python -m build
@@ -42,3 +43,40 @@ jobs:
         with:
           name: distributions
           path: dist/*
+  browser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - run: sudo apt-get update && sudo apt-get install -y iverilog make
+      - run: python -m pip install --constraint requirements-runtime.txt -e '.[test,browser-test]'
+      - run: python -m playwright install --with-deps chromium
+      - name: Exercise the browser in a fresh workspace
+        env:
+          CHIPFLOW_URL: http://127.0.0.1:8765
+        run: |
+          python -m chipflow --runs .chipflow/browser-validation/runs serve --port 8765 > browser-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          python -c 'import time,urllib.request; time.sleep(2); urllib.request.urlopen("http://127.0.0.1:8765/api/health",timeout=10)'
+          python tests/browser_smoke.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure()
+        with:
+          name: browser-failure
+          include-hidden-files: true
+          path: |
+            browser-server.log
+            .chipflow/browser-test-artifacts
+  container:
+    needs: distribution
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: distributions
+          path: dist/
+      - run: docker build -f packaging/Dockerfile.smoke -t chipflow-smoke .

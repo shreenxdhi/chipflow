@@ -14,13 +14,13 @@ brew install shreenxdhi/chipflow/chipflow
 chipflow setup
 ```
 
-The [0.1.0 beta release](https://github.com/shreenxdhi/chipflow/releases/tag/v0.1.0)
+The [1.0.0 release](https://github.com/shreenxdhi/chipflow/releases/tag/v1.0.0)
 and [Homebrew tap](https://github.com/shreenxdhi/homebrew-chipflow) are available.
 The first Homebrew installation builds dependencies from source and may take
 several minutes. Python users with Python 3.11 or newer can install the tagged source:
 
 ```sh
-pipx install 'git+https://github.com/shreenxdhi/chipflow.git@v0.1.0'
+pipx install 'git+https://github.com/shreenxdhi/chipflow.git@v1.0.0'
 ```
 
 PyPI publication is pending maintainer account configuration; `pipx install chipflow`
@@ -96,6 +96,8 @@ chipflow cancel RUN_ID
 chipflow retry RUN_ID
 chipflow compare LEFT_ID RIGHT_ID
 chipflow doctor
+chipflow backup chipflow-history.tar.gz
+chipflow --runs /safe/path/restored-runs restore chipflow-history.tar.gz
 ```
 
 `run` returns immediately unless `--wait` is supplied. Ctrl+C during `run --wait`
@@ -148,7 +150,9 @@ and remain cancellable. Simulations can execute alongside a physical run.
 
 Each run records source/configuration snapshots and hashes, tool versions, ORFS
 revision, stage timings, command output, metrics, and artifacts. A completed flow
-means the requested commands exited successfully. Timing, router DRC, and overall
+means the requested commands exited successfully and expected physical outputs exist.
+Saved inputs and configuration are integrity-checked before execution and retry.
+Timing, router DRC, and overall
 physical checks are reported separately. Full foundry DRC, LVS, and tapeout readiness
 are not certified by Chipflow.
 
@@ -156,10 +160,12 @@ The validated native flows are a Nangate45 counter and a Sky130 dual-channel DMA
 controller. Other platforms and designs require their own verification. The
 clock-only counter constraints do not establish I/O timing coverage.
 
-The first release is a beta: Linux is the validated runtime, inputs must be trusted,
-and paths used by ORFS must avoid spaces and Make/shell metacharacters. Automatic
+The 1.x release supports single-user Linux operation with trusted inputs and
+toolchains. Paths used by ORFS must avoid spaces and Make/shell metacharacters. Automatic
 EDA installation, arbitrary PDK hooks, remote workers, and a container execution
 backend are not included. A container is used to test clean manager installation.
+See [operations](docs/OPERATIONS.md) for the supported host/toolchain matrix,
+upgrades, backups, crash recovery, monitoring, and maintenance.
 
 ## Development and releases
 
