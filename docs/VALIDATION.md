@@ -33,3 +33,16 @@ validation; a Ruby syntax check alone is not equivalent to an installed formula 
 
 The release remains beta until the documented release checks pass on supported
 hosts. New designs, tool revisions, and platform integrations require validation.
+
+## Release candidate checks
+
+The 0.1.0 candidate passed 43 tests on each of Python 3.11–3.14 in GitHub CI.
+The isolated wheel test ran a real Icarus simulation and served the installed web
+application outside the checkout. A fresh Debian/Python 3.12 container also passed
+simulation and installed-dashboard checks. The pinned runtime dependency audit
+reported no known vulnerabilities at release preparation.
+
+A Homebrew source installation and functional `brew test` passed in the official
+Linuxbrew container, including compiled native Python dependencies. The tested
+archive matches the published GitHub release SHA-256. Source builds may take
+several minutes; a prebuilt Homebrew bottle is not included in this release.

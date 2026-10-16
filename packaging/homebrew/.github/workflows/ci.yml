@@ -1,0 +1,23 @@
+name: Formula
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: Homebrew/actions/setup-homebrew@4790763c0a3ba4036f72634dc079c4a7dfcd4878
+      - name: Load the reviewed formula
+        run: |
+          brew tap shreenxdhi/chipflow
+          cp Formula/chipflow.rb "$(brew --repository)/Library/Taps/shreenxdhi/homebrew-chipflow/Formula/chipflow.rb"
+          brew trust --formula shreenxdhi/chipflow/chipflow
+      - run: brew install --build-from-source shreenxdhi/chipflow/chipflow
+      - run: brew test shreenxdhi/chipflow/chipflow
+      - run: chipflow --version
