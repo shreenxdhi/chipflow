@@ -49,3 +49,28 @@ several minutes; a prebuilt Homebrew bottle is not included in this release.
 
 The public tap also passed a fresh source installation, `brew test`, and version
 check on a [GitHub Linux runner](https://github.com/shreenxdhi/homebrew-chipflow/actions/runs/38921259283).
+
+## 1.0.0 stable acceptance
+
+The expanded [release CI](https://github.com/shreenxdhi/chipflow/actions/runs/38928101321)
+passed all 65 tests on Python 3.11–3.14 across Ubuntu 22.04 and 24.04, distribution
+validation, installed-wheel simulation/server checks, browser interaction, and a
+clean Debian 12 container installation. The browser test covers fresh-workspace
+setup, missing physical tools, real simulation, waveform downloads, comparisons,
+retry/cancellation, pause/resume, bounded large logs, and mobile overflow. The
+runtime audit reported no known vulnerabilities and generated a dependency SBOM.
+
+Fresh native acceptance runs completed the counter and dual-channel DMA flows
+through GDSII using the revisions above, with the timing and router results in the
+table unchanged. KLayout read both outputs and confirmed their expected top cells:
+33 cells for the counter and 129 for the DMA. Final GDS SHA-256 values:
+
+- Counter: `628630f6148e805fa0ef36525094925294a8399ec507bd3ffc75bee767554d89`
+- DMA: `cd08392361c576b633b391347e53eaafe414e7b4039e8e47e865be92294de3ae`
+
+All 25 existing version-0.1 history entries were backed up and restored into a
+separate directory. Automated restoration also retries a real simulation after
+removing the original run directory. Fault tests cover worker SIGKILL, inherited
+physical locks, signal/cancel cleanup, PID reuse, atomic-write failures, corrupted
+saved inputs/configuration, archive corruption/traversal/links, future schemas,
+UTF-8 log boundaries, and missing physical outputs.
