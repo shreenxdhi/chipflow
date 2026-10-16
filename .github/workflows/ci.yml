@@ -66,6 +66,7 @@ jobs:
         if: failure()
         with:
           name: browser-failure
+          include-hidden-files: true
           path: |
             browser-server.log
             .chipflow/browser-test-artifacts

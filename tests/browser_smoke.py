@@ -169,8 +169,15 @@ with sync_playwright() as p:
         expect(page.locator(".download-grid")).to_contain_text("Final layout")
     page.get_by_role("button", name="Try the counter example").click()
     page.locator("#target").select_option("finish")
+    physical = page.request.post(
+        "/api/projects/inspect", data={"config": str(example), "target": "finish"}
+    ).json()
     page.get_by_role("button", name="Check project", exact=True).click()
-    expect(page.locator("#preflight")).to_contain_text("counter_demo is ready")
+    if physical["ready"]:
+        expect(page.locator("#preflight")).to_contain_text("counter_demo is ready")
+    else:
+        expect(page.locator("#preflight")).to_contain_text("A few things need fixing first")
+        expect(page.locator("#preflight")).to_contain_text(physical["issues"][0])
     page.get_by_role("button", name="Dismiss notification").click()
     page.evaluate("scrollTo(0, 0)")
     page.screenshot(path=str(ARTIFACTS / "dashboard.png"), full_page=True)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chipflow"
-dynamic = ["version"]
+dynamic = ["version", "dependencies"]
 description = "Local RTL-to-GDS workflow manager with terminal and browser dashboards"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,7 +26,6 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
-dependencies = ["fastapi==0.143.3", "uvicorn==0.54.0", "pydantic==2.14.1", "PyYAML==6.0.3"]
 
 [project.urls]
 Homepage = "https://github.com/shreenxdhi/chipflow"
@@ -44,6 +43,7 @@ chipflow = "chipflow.cli:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "chipflow.__version__"}
+dependencies = {file = ["requirements-runtime.txt"]}
 
 [tool.setuptools.packages.find]
 include = ["chipflow*"]
