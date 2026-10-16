@@ -1,6 +1,6 @@
 include LICENSE README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md requirements-runtime.txt
 recursive-include chipflow/static *.html *.css *.js
-recursive-include chipflow/examples *.v *.yaml
+recursive-include chipflow/examples *.v *.yaml *.md *.tcl
 recursive-include docs *.md
 recursive-include tests *.py
 recursive-include scripts *.py

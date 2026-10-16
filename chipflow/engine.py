@@ -19,10 +19,12 @@ import uuid
 from pathlib import Path
 
 from .config import Project, load_project, safe_make_path
+from .customization import make_value
 from .environment import (
     activate_environment,
     discover_orfs,
     find_tool,
+    flow_path,
     orfs_bin_dirs,
     tool_search_path,
 )
@@ -232,9 +234,7 @@ class Store:
         flow = Path(project.orfs).expanduser()
         if not flow.is_absolute():
             flow = base / flow
-        flow = flow.resolve()
-        if flow.name != "flow":
-            flow /= "flow"
+        flow = flow_path(flow)
         safe_make_path(flow)
         if target != "sim" and not (flow / "Makefile").is_file():
             raise ValueError(f"ORFS Makefile missing: {flow}")
@@ -250,14 +250,19 @@ class Store:
                 original = (base / Path(src).expanduser()).resolve()
                 if not original.exists():
                     raise ValueError(f"input does not exist: {original}")
-                if (category == "include_dirs") != original.is_dir():
+                is_directory = category in {"include_dirs", "tcl"}
+                if is_directory != original.is_dir():
                     raise ValueError(
-                        f"expected {'directory' if category == 'include_dirs' else 'file'}: {original}"
+                        f"expected {'directory' if is_directory else 'file'}: {original}"
                     )
                 dest = d / "inputs" / category / str(index) / original.name
                 safe_make_path(dest)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 if original.is_dir():
+                    if dest.is_relative_to(original):
+                        raise ValueError(
+                            "An input directory contains the run store. Use a separate headers or Tcl directory."
+                        )
                     shutil.copytree(original, dest)
                 else:
                     shutil.copy2(original, dest)
@@ -287,6 +292,12 @@ class Store:
                 cfg["sdc"] = str(sdc)
                 hashes[str(sdc.relative_to(d))] = hashlib.sha256(sdc.read_bytes()).hexdigest()
             cfg["orfs"] = str(flow)
+            if cfg["tcl"]:
+                cfg["tcl"]["directory"] = snapshot(cfg["tcl"]["directory"], "tcl", 0)
+            for name, values in cfg["orfs_files"].items():
+                cfg["orfs_files"][name] = [
+                    snapshot(path, f"orfs_files/{name}", index) for index, path in enumerate(values)
+                ]
             if cfg["physical"].get("ADDER_MAP_FILE"):
                 cfg["physical"]["ADDER_MAP_FILE"] = snapshot(
                     cfg["physical"]["ADDER_MAP_FILE"], "adder_map", 0
@@ -306,6 +317,7 @@ class Store:
                 "schema_version": SCHEMA_VERSION,
                 "id": run_id,
                 "name": project.name,
+                "source_config": str(config_path.expanduser().resolve()),
                 "target": target,
                 "created": time.time(),
                 "status": "queued",
@@ -361,6 +373,13 @@ class Worker:
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
             env["QT_QPA_PLATFORM"] = "offscreen"
+            if self.cfg.tcl:
+                env.update(
+                    {
+                        f"CHIPFLOW_PARAM_{key}": make_value(value)
+                        for key, value in self.cfg.tcl.parameters.items()
+                    }
+                )
             parent_fd, worker_fd = os.pipe()
             inherited = (parent_fd,) + ((self.flow_lock.fileno(),) if self.flow_lock else ())
             try:
@@ -517,9 +536,22 @@ class Worker:
             "SDC_FILE": safe_make_path(Path(cfg.sdc)),
             "VERILOG_INCLUDE_DIRS": " ".join(cfg.include_dirs),
             **cfg.physical,
+            **cfg.orfs_variables,
+            **{
+                key: " ".join(safe_make_path(Path(path)) for path in values)
+                for key, values in cfg.orfs_files.items()
+            },
         }
+        if cfg.tcl:
+            root = Path(cfg.tcl.directory)
+            entries["CHIPFLOW_TCL_DIR"] = safe_make_path(root)
+            entries.update(
+                {name: safe_make_path(root / relative) for name, relative in cfg.tcl.hooks.items()}
+            )
         path = self.d / "config.mk"
-        path.write_text("".join(f"export {key} = {value}\n" for key, value in entries.items()))
+        path.write_text(
+            "".join(f"export {key} = {make_value(value)}\n" for key, value in entries.items())
+        )
         return path
 
     def validate_outputs(self, stage):

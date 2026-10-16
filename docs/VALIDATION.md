@@ -74,3 +74,21 @@ removing the original run directory. Fault tests cover worker SIGKILL, inherited
 physical locks, signal/cancel cleanup, PID reuse, atomic-write failures, corrupted
 saved inputs/configuration, archive corruption/truncation/traversal/links, future schemas,
 UTF-8 log boundaries, and missing physical outputs.
+
+## 1.1.0 learning and customization acceptance
+
+The local suite passed 84 tests, including Tcl bundle preservation through retry
+and backup/restore, scoped script parameters, installed-variable/hook discovery,
+unsafe/protected overrides, full YAML copies, and noncanonical flow-directory paths.
+The expanded browser smoke passed a real beginner simulation, persisted learning
+progress and workspace mode, malformed YAML errors, complete YAML saves, guided
+copy preservation, and the existing run/log/download/cancellation/mobile checks.
+The installed wheel passed from outside the checkout, including its learning guide,
+Tcl/helper resources, expert initialization, quickstart simulation, and server.
+
+A real expert Nangate45 counter flow completed through GDSII. Its native
+POST_FLOORPLAN_TCL and POST_CTS_TCL scripts executed, including a shared helper and
+the configured LABEL parameter. Timing and router checks passed; overall physical
+signoff remains unknown. The validated native toolchain and Sky130 DMA acceptance
+are described above. Release CI repeats the manager tests across supported hosts
+and Python versions; the public tap validates the installed formula separately.

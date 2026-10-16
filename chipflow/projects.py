@@ -7,8 +7,9 @@ from pathlib import Path
 import yaml
 
 from .config import Project, load_project, safe_make_path
+from .customization import supported_points, variable_catalog
 from .engine import STAGES
-from .environment import bundled_example, discover_orfs, find_tool, orfs_bin_dirs
+from .environment import bundled_example, discover_orfs, find_tool, flow_path, orfs_bin_dirs
 from .setup import assess
 
 
@@ -50,6 +51,15 @@ def inspect_project(path: Path, target: str):
         groups.append(("Timing constraints", [project.sdc], False))
     if project.physical.get("ADDER_MAP_FILE"):
         groups.append(("Adder mapping", [project.physical["ADDER_MAP_FILE"]], False))
+    if project.tcl:
+        groups.append(("Tcl directory", [project.tcl.directory], True))
+        root = resolve(base, project.tcl.directory)
+        for name, relative in project.tcl.hooks.items():
+            script = (root / relative).resolve()
+            if not script.is_relative_to(root) or not script.is_file():
+                issues.append(f"{name}: Script not found inside Tcl directory: {relative}")
+    for name, files in project.orfs_files.items():
+        groups.append((f"ORFS file: {name}", files, False))
     if project.simulation:
         groups.extend(
             [
@@ -82,9 +92,7 @@ def inspect_project(path: Path, target: str):
         required.extend(["make", "yosys", "openroad"])
         if target == "finish":
             required.append("klayout")
-        flow = resolve(base, project.orfs)
-        if flow.name != "flow":
-            flow /= "flow"
+        flow = flow_path(resolve(base, project.orfs))
         if not (flow / "Makefile").is_file():
             issues.append(
                 f"ORFS Makefile not found in {flow}. Update the OpenROAD flow folder in your project."
@@ -93,6 +101,21 @@ def inspect_project(path: Path, target: str):
             issues.append(
                 f"Platform '{project.platform}' is unavailable in this ORFS installation. Choose an installed platform."
             )
+        custom = {*project.orfs_variables, *project.orfs_files}
+        if custom:
+            catalog = variable_catalog(flow)
+            for name in sorted(custom):
+                if name not in catalog:
+                    issues.append(
+                        f"{name} is not in this ORFS installation's variable reference. Use chipflow variables --orfs {flow} to choose a supported setting."
+                    )
+        if project.tcl and project.tcl.hooks:
+            available = supported_points(flow)
+            for name in project.tcl.hooks:
+                if name not in available:
+                    issues.append(
+                        f"This ORFS revision does not execute {name}. Choose an available hook or a compatible revision."
+                    )
     try:
         safe_make_path(resolve(base, project.orfs))
     except ValueError as exc:
@@ -105,7 +128,7 @@ def inspect_project(path: Path, target: str):
     return {
         "path": str(path),
         "orfs": str(resolve(base, project.orfs)),
-        "project": project.model_dump(),
+        "project": absolute_project(project, base),
         "inputs": inputs,
         "ready": not issues,
         "issues": issues,
@@ -115,7 +138,12 @@ def inspect_project(path: Path, target: str):
 
 def list_projects(folder: Path):
     items = []
-    paths = [*sorted(folder.glob("*.yaml")), *Path("examples").glob("*/*.yaml"), bundled_example()]
+    paths = [
+        *sorted(folder.glob("*.yaml")),
+        *sorted(folder.glob("first-chip-*/chipflow.yaml")),
+        *Path("examples").glob("*/*.yaml"),
+        bundled_example(),
+    ]
     seen = set()
     for path in paths:
         if path.resolve() in seen:
@@ -136,10 +164,8 @@ def list_projects(folder: Path):
     return items
 
 
-def create_project(folder: Path, project: Project):
-    # New versions get new files: source projects and existing runs remain reproducible.
+def absolute_project(project: Project, base: Path):
     data = project.model_dump()
-    base = Path.cwd()
     for field in ["rtl", "include_dirs"]:
         data[field] = [str(resolve(base, p)) for p in data[field]]
     data["orfs"] = str(resolve(base, data["orfs"]))
@@ -148,6 +174,18 @@ def create_project(folder: Path, project: Project):
     if data["simulation"]:
         for field in ["testbench", "cell_models"]:
             data["simulation"][field] = [str(resolve(base, p)) for p in data["simulation"][field]]
+    if data["tcl"]:
+        data["tcl"]["directory"] = str(resolve(base, data["tcl"]["directory"]))
+    for name, values in data["orfs_files"].items():
+        data["orfs_files"][name] = [str(resolve(base, value)) for value in values]
+    if data["physical"].get("ADDER_MAP_FILE"):
+        data["physical"]["ADDER_MAP_FILE"] = str(resolve(base, data["physical"]["ADDER_MAP_FILE"]))
+    return data
+
+
+def create_project(folder: Path, project: Project):
+    # New versions get new files: source projects and existing runs remain reproducible.
+    data = absolute_project(project, Path.cwd())
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = folder / f"{project.name}-{uuid.uuid4().hex[:8]}.yaml"
     with open(path, "x", opener=lambda p, flags: os.open(p, flags, 0o600)) as f:

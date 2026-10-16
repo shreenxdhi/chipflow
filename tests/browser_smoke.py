@@ -50,6 +50,59 @@ with sync_playwright() as p:
     expect(page.locator("#tools-content")).to_contain_text("iverilog")
     page.keyboard.press("Escape")
 
+    # A first-time learner creates a counter and executes real Icarus simulation.
+    expect(page.locator("#lessons .lesson")).to_have_count(7)
+    with page.expect_response(
+        lambda r: r.url.endswith("/api/runs") and r.request.method == "POST"
+    ) as learning:
+        page.locator("#learn-start").click()
+    learning_id = learning.value.json()["id"]
+    expect(page.locator(".detail .meta")).to_have_text(learning_id, timeout=30000)
+    expect(page.locator("#learning-progress")).to_contain_text("1 of 7", timeout=60000)
+    expect(page.locator("#learn-next")).to_contain_text("Turn RTL into gates")
+    learner_path = page.locator("#config").input_value()
+    page.reload()
+    expect(page.locator("#learning-progress")).to_contain_text("1 of 7")
+
+    # Expert mode exposes a complete YAML copy, validates errors, and persists.
+    page.locator("#experience").select_option("expert")
+    expect(page.locator("#learning")).not_to_be_visible()
+    page.locator("#config").fill(learner_path)
+    page.locator("#edit-yaml").click()
+    expect(page.locator("#yaml-dialog")).to_be_visible()
+    full = yaml.safe_load(page.locator("#yaml-editor").input_value())
+    full["timeout_seconds"] = 1234
+    full["clocks"].append({"port": "aux_clk", "period_ns": 20})
+    full["tcl"] = {
+        "directory": str(Path(learner_path).parent / "tcl"),
+        "hooks": {"POST_CTS_TCL": "after_cts.tcl"},
+        "parameters": {"LABEL": "browser customization"},
+    }
+    full["orfs_variables"] = {"RECOVER_POWER": 0}
+    page.locator("#yaml-editor").fill("rtl: [")
+    page.locator("#yaml-save").click()
+    expect(page.locator("#yaml-error")).to_contain_text("indentation and syntax")
+    page.locator("#yaml-editor").fill(yaml.safe_dump(full))
+    page.locator("#yaml-save").click()
+    expect(page.locator("#yaml-dialog")).not_to_be_visible()
+    full_copy = page.locator("#config").input_value()
+    assert full_copy != learner_path
+    assert yaml.safe_load(Path(full_copy).read_text()) == full
+    page.reload()
+    expect(page.locator("#experience")).to_have_value("expert")
+    page.locator("#config").fill(full_copy)
+    page.locator("#edit-project").click()
+    expect(page.locator("#p-hooks")).to_have_value("POST_CTS_TCL=after_cts.tcl")
+    page.locator("#save-project").click()
+    expect(page.locator("#project-dialog")).not_to_be_visible()
+    form_copy = yaml.safe_load(Path(page.locator("#config").input_value()).read_text())
+    assert form_copy["timeout_seconds"] == 1234
+    assert form_copy["clocks"] == full["clocks"]
+    assert form_copy["tcl"] == full["tcl"]
+    assert form_copy["orfs_variables"] == full["orfs_variables"]
+    page.locator("#experience").select_option("learn")
+    page.locator("#target").select_option("sim")
+
     # Missing configuration gets a useful message and creates no run.
     before = len(page.request.get("/api/runs").json())
     page.locator("#config").fill("/missing/chipflow-project.yaml")
@@ -194,6 +247,8 @@ with sync_playwright() as p:
         json.dumps(
             {
                 "browser_errors": errors,
+                "learning_simulation": "passed",
+                "expert_yaml_and_preservation": "passed",
                 "guided_project_creation": "passed",
                 "preflight_errors": "passed",
                 "simulation": "passed",

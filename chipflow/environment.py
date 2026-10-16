@@ -120,7 +120,7 @@ def bundled_example() -> Path:
     return Path(__file__).parent / "examples" / "counter" / "chipflow.yaml"
 
 
-def init_project(destination: Path, orfs: str | None = None) -> Path:
+def init_project(destination: Path, orfs: str | None = None, expert=False) -> Path:
     import yaml
 
     destination = destination.expanduser().resolve()
@@ -131,5 +131,12 @@ def init_project(destination: Path, orfs: str | None = None) -> Path:
     config = destination / "chipflow.yaml"
     data = yaml.safe_load(config.read_text())
     data["orfs"] = orfs or discover_orfs()
+    if expert:
+        data["tcl"] = {
+            "directory": "tcl",
+            "hooks": {"POST_FLOORPLAN_TCL": "after_floorplan.tcl", "POST_CTS_TCL": "after_cts.tcl"},
+            "parameters": {"LABEL": "counter customization"},
+        }
+        data["orfs_variables"] = {"RECOVER_POWER": 0}
     config.write_text(yaml.safe_dump(data, sort_keys=False))
     return config

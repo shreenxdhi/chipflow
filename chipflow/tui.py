@@ -13,6 +13,7 @@ from collections import deque
 from pathlib import Path
 
 from .engine import STAGES, TERMINAL, Store
+from .learning import guide_text
 from .projects import inspect_project, list_projects
 from .setup import assess, format_report
 
@@ -171,6 +172,7 @@ class Dashboard:
         self.confirm_run: str | None = None
         self.setup_report = assess(versions=False)
         self.setup_scroll = 0
+        self.guide_scroll = 0
         if not self.setup_report["ready"]:
             self.message = "Some EDA prerequisites are missing. Press s for setup suggestions, or n to check a project."
 
@@ -638,6 +640,9 @@ class Dashboard:
             self.setup_report = assess(versions=False)
             self.setup_scroll = 0
             self.modal = "setup"
+        elif key == "l":
+            self.guide_scroll = 0
+            self.modal = "guide"
         elif key in ("n", "p"):
             self.modal_errors = []
             self.open_new()
@@ -730,14 +735,21 @@ class Dashboard:
         if key in ("\x1b", "\x03"):
             self.modal = None
             return
-        if self.modal == "setup":
-            if key in ("q", "s", "\n", "\r"):
+        if self.modal in {"setup", "guide"}:
+            scroll_name = "setup_scroll" if self.modal == "setup" else "guide_scroll"
+            if key in ("q", "s", "l", "\n", "\r"):
                 self.modal = None
             elif key in ("j", curses.KEY_DOWN, curses.KEY_NPAGE):
-                self.setup_scroll += 1 if key != curses.KEY_NPAGE else 8
+                setattr(
+                    self,
+                    scroll_name,
+                    getattr(self, scroll_name) + (1 if key != curses.KEY_NPAGE else 8),
+                )
             elif key in ("k", curses.KEY_UP, curses.KEY_PPAGE):
-                self.setup_scroll = max(
-                    0, self.setup_scroll - (8 if key == curses.KEY_PPAGE else 1)
+                setattr(
+                    self,
+                    scroll_name,
+                    max(0, getattr(self, scroll_name) - (8 if key == curses.KEY_PPAGE else 1)),
                 )
             return
         if self.modal == "help":
@@ -809,17 +821,21 @@ class Dashboard:
             "cancel": "CANCEL RUN?",
             "help": "KEYBOARD GUIDE",
             "setup": "EDA SETUP | Up/Down scroll | Enter close",
+            "guide": "LEARN RTL TO GDS | Up/Down scroll | Enter close",
         }[self.modal]
         self.write(top + 1, left + 2, title, curses.A_REVERSE | curses.A_BOLD, width - 4)
         content = []
-        if self.modal == "setup":
+        if self.modal in {"setup", "guide"}:
+            scroll_name = "setup_scroll" if self.modal == "setup" else "guide_scroll"
+            text = format_report(self.setup_report) if self.modal == "setup" else guide_text()
             wrapped = [
                 part
-                for line in format_report(self.setup_report).splitlines()
+                for line in text.splitlines()
                 for part in (textwrap.wrap(plain(line), width - 4) or [""])
             ]
-            self.setup_scroll = min(self.setup_scroll, max(0, len(wrapped) - (rows - 4)))
-            content = wrapped[self.setup_scroll :]
+            scroll = min(getattr(self, scroll_name), max(0, len(wrapped) - (rows - 4)))
+            setattr(self, scroll_name, scroll)
+            content = wrapped[scroll:]
         elif self.modal == "help":
             content = [
                 "Tab              Switch run history / details",
@@ -835,6 +851,7 @@ class Dashboard:
                 "c                Cancel selected active run (y to confirm)",
                 "r                Refresh now",
                 "s                Check EDA prerequisites and setup suggestions",
+                "l                Learn the workflow and common VLSI terms",
                 "q / Ctrl+C       Quit dashboard; workers keep running",
                 "",
                 "Close with Escape or Enter. No browser server is needed.",

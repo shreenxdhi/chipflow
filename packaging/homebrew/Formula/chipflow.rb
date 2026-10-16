@@ -3,8 +3,8 @@ class Chipflow < Formula
 
   desc "Local RTL-to-GDS workflow manager with terminal and browser dashboards"
   homepage "https://github.com/shreenxdhi/chipflow"
-  url "https://github.com/shreenxdhi/chipflow/releases/download/v1.0.0/chipflow-1.0.0.tar.gz"
-  sha256 "99cc9fe679e791e7e599c45d89d2736da17684a1ae6c38178079f06771c795dc"
+  url "https://github.com/shreenxdhi/chipflow/releases/download/v1.1.0/chipflow-1.1.0.tar.gz"
+  sha256 "6e3e9b5801425c555f90ac5a0177a0f348b2f12389020a1afb03cae25c595ee3"
   license "Apache-2.0"
 
   depends_on :linux
@@ -95,15 +95,20 @@ class Chipflow < Formula
     <<~EOS
       Check EDA prerequisites and installation suggestions:
         chipflow setup
-      Create your first project:
-        chipflow init counter-demo
+      Run your first self-checking counter (requires Icarus Verilog):
+        chipflow quickstart first-chip
+      Learn the flow: chipflow guide
+      Customize Tcl: chipflow init custom-chip --expert
       EDA tools and licensed platform data are installed separately.
     EOS
   end
 
   test do
     assert_match version.to_s, shell_output("#{bin}/chipflow --version")
-    system bin/"chipflow", "init", testpath/"demo"
+    system bin/"chipflow", "init", testpath/"demo", "--expert"
+    assert_path_exists testpath/"demo/tcl/common.tcl"
+    assert_path_exists testpath/"demo/GUIDE.md"
+    assert_match "Your first RTL-to-GDS", shell_output("#{bin}/chipflow guide")
     assert_path_exists testpath/"demo/counter.v"
     assert_match "rtl:", (testpath/"demo/chipflow.yaml").read
     system bin/"chipflow", "--runs", testpath/"runs", "backup", testpath/"history.tar.gz"

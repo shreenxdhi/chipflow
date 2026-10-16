@@ -66,7 +66,7 @@ The tap layout is in `packaging/homebrew`. Generate the formula from the **exact
 source archive attached to the GitHub release:
 
 ```sh
-.venv/bin/python scripts/generate_formula.py --sdist dist/chipflow-1.0.0.tar.gz
+.venv/bin/python scripts/generate_formula.py --sdist dist/1.1.0/chipflow-1.1.0.tar.gz
 ruby -c packaging/homebrew/Formula/chipflow.rb
 ```
 

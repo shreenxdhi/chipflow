@@ -4,6 +4,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .customization import TCL_POINTS, protected, validate_variable
 from .environment import discover_orfs
 
 NAME = r"[A-Za-z_][A-Za-z0-9_]*"
@@ -47,6 +48,37 @@ class Simulation(Strict):
         return value
 
 
+class TclConfig(Strict):
+    directory: str
+    hooks: dict[str, str] = Field(default_factory=dict)
+    parameters: dict[str, str | float | int | bool] = Field(default_factory=dict)
+
+    @field_validator("hooks")
+    @classmethod
+    def scripts(cls, values):
+        for key, value in values.items():
+            if key not in TCL_POINTS:
+                raise ValueError(
+                    f"Unknown Tcl point: {key}. Use chipflow hooks to list supported names."
+                )
+            path = Path(value)
+            if (
+                path.is_absolute()
+                or not path.parts
+                or ".." in path.parts
+                or not re.fullmatch(r"[A-Za-z0-9_./+\-]+", value)
+            ):
+                raise ValueError(f"{key} must name a relative file inside tcl.directory")
+        return values
+
+    @field_validator("parameters")
+    @classmethod
+    def parameter_names(cls, values):
+        if any(not re.fullmatch(NAME, key) for key in values):
+            raise ValueError("Tcl parameter names must be simple identifiers")
+        return values
+
+
 class Project(Strict):
     name: str
     top: str
@@ -58,6 +90,9 @@ class Project(Strict):
     include_dirs: list[str] = []
     simulation: Simulation | None = None
     physical: dict[str, str | float | int] = {}
+    tcl: TclConfig | None = None
+    orfs_variables: dict[str, str | float | int | bool] = Field(default_factory=dict)
+    orfs_files: dict[str, list[str]] = Field(default_factory=dict)
     save_images: bool = False
     threads: int = Field(default=2, ge=1, le=256)
     timeout_seconds: int = Field(default=3600, ge=1, le=604800)
@@ -112,6 +147,24 @@ class Project(Strict):
             raise ValueError("provide clocks or an SDC file")
         if len({c.port for c in self.clocks}) != len(self.clocks):
             raise ValueError("duplicate clock port")
+        for key, value in self.orfs_variables.items():
+            validate_variable(key, value)
+        for key, values in self.orfs_files.items():
+            if (
+                not re.fullmatch(r"[A-Z][A-Z0-9_]*", key)
+                or protected(key)
+                or key in TCL_POINTS
+                or not values
+            ):
+                raise ValueError(f"Unsupported file override: {key}; use tcl.hooks for scripts")
+        groups = [
+            set(self.physical),
+            set(self.orfs_variables),
+            set(self.orfs_files),
+            set(self.tcl.hooks) if self.tcl else set(),
+        ]
+        if sum(map(len, groups)) != len(set().union(*groups)):
+            raise ValueError("An ORFS setting must appear in only one configuration section")
         return self
 
 
