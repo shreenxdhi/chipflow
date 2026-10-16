@@ -1,0 +1,554 @@
+"""One detached worker per run; subprocess groups are killed on cancel/timeout."""
+
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import json
+import logging
+import math
+import os
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+from .config import Project, load_project, safe_make_path
+from .environment import activate_environment, discover_orfs, orfs_bin_dirs, tool_search_path
+
+STAGES = ["sim", "synth", "gate_sim", "floorplan", "place", "cts", "route", "finish"]
+TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
+
+
+def json_safe(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    return value
+
+
+def save(path: Path, value):
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(value, indent=2))
+    tmp.replace(path)
+
+
+def probe(argv, cwd=None):
+    try:
+        p = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=15)
+        return (p.stdout + p.stderr).strip()[:4000]
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return str(exc)
+
+
+def doctor(orfs: str | None = None):
+    root = Path(orfs or discover_orfs()).expanduser().resolve()
+    flow = root if root.name == "flow" else root / "flow"
+    tools = {}
+    for name, args in {
+        "openroad": ["-version"],
+        "yosys": ["-V"],
+        "iverilog": ["-V"],
+        "vvp": ["-V"],
+        "klayout": ["-v"],
+        "make": ["--version"],
+    }.items():
+        exe = shutil.which(name)
+        tools[name] = {"path": exe, "version": probe([exe, *args]) if exe else None}
+    return {
+        "flow": str(flow),
+        "makefile": (flow / "Makefile").is_file(),
+        "revision": probe(["git", "rev-parse", "HEAD"], flow) if flow.exists() else None,
+        "dirty": probe(
+            ["git", "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all"],
+            flow,
+        )
+        if flow.exists()
+        else None,
+        "platforms": sorted(
+            p.name for p in (flow / "platforms").glob("*") if (p / "config.mk").is_file()
+        ),
+        "tools": tools,
+    }
+
+
+class Store:
+    def __init__(self, root: Path | str):
+        self.root = Path(root).expanduser().resolve()
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    def directory(self, run_id):
+        if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+            raise ValueError("invalid run ID")
+        result = self.root / run_id
+        if not result.resolve().is_relative_to(self.root):
+            raise ValueError("Run directory escapes the history directory")
+        if not (result / "run.json").is_file():
+            raise FileNotFoundError(run_id)
+        return result
+
+    def get(self, run_id):
+        d = self.directory(run_id)
+        state = json.loads((d / "run.json").read_text())
+        if state["status"] not in TERMINAL and time.time() - state["created"] > 5:
+            try:
+                pid = state.get("pid") or 999999999
+                os.kill(pid, 0)
+                proc = Path(f"/proc/{pid}")
+                if proc.exists():
+                    if (proc / "stat").read_text().split(") ", 1)[1].startswith("Z"):
+                        raise ProcessLookupError()
+                    if str(d).encode() not in (proc / "cmdline").read_bytes():
+                        raise ProcessLookupError()
+            except (ProcessLookupError, FileNotFoundError):
+                state["status"] = "interrupted"
+                state["error"] = "Worker exited unexpectedly; inspect logs."
+                for stage in state["stages"]:
+                    if stage["status"] == "running":
+                        stage["status"] = "interrupted"
+        return state
+
+    def history(self):
+        runs = []
+        for path in self.root.glob("*/run.json"):
+            try:
+                run = self.get(path.parent.name)
+                if not isinstance(run.get("created"), (int, float)):
+                    raise ValueError("invalid creation timestamp")
+                runs.append(run)
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                logging.getLogger(__name__).warning("Cannot read run %s: %s", path.parent.name, exc)
+        return sorted(runs, key=lambda r: r["created"], reverse=True)
+
+    def compare(self, left, right):
+        a, b = self.get(left), self.get(right)
+        return {
+            "left": a,
+            "right": b,
+            "deltas": {
+                key: b["metrics"][key] - value
+                for key, value in a.get("metrics", {}).items()
+                if isinstance(value, (int, float))
+                and isinstance(b.get("metrics", {}).get(key), (int, float))
+            },
+        }
+
+    def retry(self, run_id):
+        previous = self.get(run_id)
+        return self.start(self.directory(run_id) / "project.json", previous["target"])
+
+    def cancel(self, run_id):
+        state = self.get(run_id)
+        if state["status"] not in TERMINAL:
+            (self.directory(run_id) / "cancel").touch()
+        return {"id": run_id, "cancellation_requested": state["status"] not in TERMINAL}
+
+    def artifact(self, run_id, relative):
+        root = self.directory(run_id)
+        path = (root / relative).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise FileNotFoundError(relative)
+        return path
+
+    def artifacts(self, run_id):
+        root = self.directory(run_id)
+        return [
+            {"path": str(p.relative_to(root)), "bytes": p.stat().st_size}
+            for p in sorted(root.rglob("*"))
+            if p.is_file() and not p.is_symlink() and p.name not in {"cancel", "run.tmp"}
+        ]
+
+    def start(self, config_path: Path, target="sim"):
+        if target not in STAGES:
+            raise ValueError("unknown target")
+        activate_environment()
+        from .projects import PreflightError, inspect_project
+
+        preflight = inspect_project(config_path, target)
+        if not preflight["ready"]:
+            raise PreflightError(preflight["issues"])
+        project, base = load_project(config_path)
+        if target in {"sim", "gate_sim"} and not project.simulation:
+            raise ValueError("simulation configuration is required")
+        if target == "gate_sim" and not project.simulation.cell_models:
+            raise ValueError(
+                "gate_sim requires functional cell_models compatible with this platform"
+            )
+        flow = Path(project.orfs).expanduser()
+        if not flow.is_absolute():
+            flow = base / flow
+        flow = flow.resolve()
+        if flow.name != "flow":
+            flow /= "flow"
+        safe_make_path(flow)
+        if target != "sim" and not (flow / "Makefile").is_file():
+            raise ValueError(f"ORFS Makefile missing: {flow}")
+        run_id = uuid.uuid4().hex
+        d = self.root / run_id
+        safe_make_path(d)
+        d.mkdir(mode=0o700)
+        try:
+            hashes = {}
+
+            def snapshot(src, category, index):
+                original = (base / Path(src).expanduser()).resolve()
+                if not original.exists():
+                    raise ValueError(f"input does not exist: {original}")
+                if (category == "include_dirs") != original.is_dir():
+                    raise ValueError(
+                        f"expected {'directory' if category == 'include_dirs' else 'file'}: {original}"
+                    )
+                dest = d / "inputs" / category / str(index) / original.name
+                safe_make_path(dest)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if original.is_dir():
+                    shutil.copytree(original, dest)
+                else:
+                    shutil.copy2(original, dest)
+                for file in dest.rglob("*") if dest.is_dir() else [dest]:
+                    if file.is_file():
+                        hashes[str(file.relative_to(d))] = hashlib.sha256(
+                            file.read_bytes()
+                        ).hexdigest()
+                return str(dest)
+
+            cfg = project.model_dump()
+            for field in ["rtl", "include_dirs"]:
+                cfg[field] = [snapshot(p, field, i) for i, p in enumerate(cfg[field])]
+            if project.simulation:
+                for field in ["testbench", "cell_models"]:
+                    cfg["simulation"][field] = [
+                        snapshot(p, field, i) for i, p in enumerate(cfg["simulation"][field])
+                    ]
+            if cfg["sdc"]:
+                cfg["sdc"] = snapshot(cfg["sdc"], "constraints", 0)
+            else:
+                sdc = d / "inputs" / "clocks.sdc"
+                sdc.write_text(
+                    "".join(
+                        f"create_clock -name {c.port} -period {c.period_ns} [get_ports {{{c.port}}}]\n"
+                        for c in project.clocks
+                    )
+                )
+                cfg["sdc"] = str(sdc)
+                hashes[str(sdc.relative_to(d))] = hashlib.sha256(sdc.read_bytes()).hexdigest()
+            cfg["orfs"] = str(flow)
+            save(d / "project.json", cfg)
+            save(
+                d / "manifest.json",
+                {
+                    "source_config": str(config_path.expanduser().resolve()),
+                    "input_sha256": hashes,
+                    "configuration": project.model_dump(),
+                },
+            )
+            state = {
+                "id": run_id,
+                "name": project.name,
+                "target": target,
+                "created": time.time(),
+                "status": "queued",
+                "stages": [],
+                "checks": {"timing": "unknown", "physical": "unknown"},
+                "pid": None,
+            }
+            save(d / "run.json", state)
+            log = (d / "worker.log").open("ab")
+            with log:
+                subprocess.Popen(
+                    [sys.executable, "-m", "chipflow.worker", str(d)],
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    env={**os.environ, "PATH": tool_search_path(orfs_bin_dirs(flow))},
+                )
+            return state
+        except Exception:
+            shutil.rmtree(d)
+            raise
+
+
+class Cancelled(Exception):
+    pass
+
+
+class Worker:
+    def __init__(self, directory: Path):
+        self.d = directory
+        self.state = json.loads((directory / "run.json").read_text())
+        self.cfg = Project.model_validate_json((directory / "project.json").read_text())
+
+    def persist(self):
+        save(self.d / "run.json", self.state)
+
+    def command(self, argv, cwd, timeout):
+        if (self.d / "cancel").exists():
+            raise Cancelled()
+        with (self.d / "console.log").open("ab", buffering=0) as log:
+            log.write(("\n$ " + shlex.join(argv) + "\n").encode())
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            env["QT_QPA_PLATFORM"] = "offscreen"
+            process = subprocess.Popen(
+                argv, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, env=env, start_new_session=True
+            )
+            start = time.monotonic()
+            try:
+                while process.poll() is None:
+                    if (self.d / "cancel").exists():
+                        raise Cancelled()
+                    if time.monotonic() - start > timeout:
+                        raise TimeoutError(f"command exceeded {timeout}s")
+                    time.sleep(0.1)
+                if (self.d / "cancel").exists():
+                    raise Cancelled()
+                if process.returncode:
+                    raise RuntimeError(f"command exited {process.returncode}")
+            finally:
+                # Also terminate any descendants left after the command exits.
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    process.wait(timeout=2)
+                except ProcessLookupError:
+                    pass
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                finally:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def simulation(self, gate=False):
+        sim = self.cfg.simulation
+        if not sim:
+            raise ValueError("simulation configuration missing")
+        sources = self.cfg.rtl
+        if gate:
+            sources = [
+                str(self.d / "results" / self.cfg.platform / self.cfg.top / "base" / "1_2_yosys.v"),
+                *sim.cell_models,
+            ]
+        output = self.d / ("gate_sim.vvp" if gate else "rtl_sim.vvp")
+        argv = ["iverilog", "-g2012", "-s", sim.top, "-o", str(output)]
+        for include in self.cfg.include_dirs:
+            argv.extend(["-I", include])
+        self.command([*argv, *sources, *sim.testbench], self.d, sim.timeout_seconds)
+        offset = (self.d / "console.log").stat().st_size
+        self.command(["vvp", str(output)], self.d, sim.timeout_seconds)
+        with (self.d / "console.log").open("rb") as log:
+            log.seek(offset)
+            # Do not count the command line itself as a pass marker.
+            result = log.read().decode(errors="replace").split("\n", 2)[-1]
+        if sim.pass_marker not in result:
+            raise RuntimeError(f"simulation exited without pass marker {sim.pass_marker!r}")
+
+    def compatibility_args(self):
+        scripts = Path(self.cfg.orfs) / "scripts"
+        changes = []
+        adapted = {}
+        synth = scripts / "synth.tcl"
+        needle = "stat -hierarchy {*}$lib_args"
+        help_text = probe([shutil.which("yosys") or "yosys", "-Q", "-T", "-p", "help stat"])
+        if synth.exists() and needle in synth.read_text() and "-hierarchy" not in help_text:
+            adapted["synth.tcl"] = synth.read_text().replace(needle, "stat {*}$lib_args")
+            changes.append(
+                "Remove -hierarchy from Yosys statistics command; legacy stat reports hierarchy implicitly"
+            )
+        # Detect the OpenRCX API rather than guessing from version strings.
+        outputs = scripts / "final_outputs.tcl"
+        probe_script = self.d / "probe_rcx.tcl"
+        probe_script.write_text(
+            'puts "CHIPFLOW_RCX:[llength [info commands set_extraction_rules_file]]"\nhelp extract_parasitics\n'
+        )
+        rcx = probe(
+            [shutil.which("openroad") or "openroad", "-no_init", "-exit", str(probe_script)]
+        )
+        old = "set_extraction_rules_file $::env(RCX_RULES)\n  extract_parasitics"
+        if (
+            outputs.exists()
+            and old in outputs.read_text()
+            and "CHIPFLOW_RCX:0" in rcx
+            and "-ext_model_file" in rcx
+        ):
+            adapted["final_outputs.tcl"] = outputs.read_text().replace(
+                old, "extract_parasitics -ext_model_file $::env(RCX_RULES)"
+            )
+            changes.append(
+                "Use legacy OpenRCX extract_parasitics -ext_model_file with the same platform rules"
+            )
+        if outputs.exists() and not self.cfg.save_images:
+            image_condition = "if { [ord::openroad_gui_compiled] } {"
+            content = adapted.get("final_outputs.tcl", outputs.read_text())
+            if image_condition in content:
+                adapted["final_outputs.tcl"] = content.replace(image_condition, "if { 0 } {")
+                changes.append(
+                    "Disable optional GUI images for headless execution (save_images: false)"
+                )
+        if not adapted:
+            return []
+        overlay = self.d / "orfs_scripts"
+        overlay.mkdir()
+        for item in scripts.iterdir():
+            (overlay / item.name).symlink_to(item, target_is_directory=item.is_dir())
+        hashes = {}
+        for name, content in adapted.items():
+            (overlay / name).unlink()
+            (overlay / name).write_text(content)
+            hashes[name] = {
+                "original_sha256": hashlib.sha256((scripts / name).read_bytes()).hexdigest(),
+                "adapted_sha256": hashlib.sha256(content.encode()).hexdigest(),
+            }
+        save(self.d / "compatibility.json", {"changes": changes, "scripts": hashes})
+        return ["SCRIPTS_DIR=" + str(overlay)]
+
+    def make_config(self):
+        cfg = self.cfg
+        entries = {
+            "DESIGN_NAME": cfg.top,
+            "PLATFORM": cfg.platform,
+            "VERILOG_FILES": " ".join(map(lambda p: safe_make_path(Path(p)), cfg.rtl)),
+            "SDC_FILE": safe_make_path(Path(cfg.sdc)),
+            "VERILOG_INCLUDE_DIRS": " ".join(cfg.include_dirs),
+            **cfg.physical,
+        }
+        path = self.d / "config.mk"
+        path.write_text("".join(f"export {key} = {value}\n" for key, value in entries.items()))
+        return path
+
+    def collect_metrics(self):
+        metrics = {}
+        for p in sorted((self.d / "logs").rglob("*.json")):
+            try:
+                value = json.loads(p.read_text())
+                if isinstance(value, dict):
+                    metrics[str(p.relative_to(self.d))] = json_safe(value)
+            except (ValueError, OSError):
+                pass
+        save(self.d / "metrics.json", metrics)
+        # Only use final-report metrics; earlier stages are estimates.
+        final = {
+            k: v
+            for path, data in metrics.items()
+            if Path(path).name.startswith("6_finish") or Path(path).name.startswith("6_report")
+            for k, v in data.items()
+        }
+        setup = final.get("finish__timing__setup__ws", final.get("timing__setup__ws"))
+        hold = final.get("finish__timing__hold__ws", final.get("timing__hold__ws"))
+        if all(
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            for value in (setup, hold)
+        ):
+            self.state["checks"]["timing"] = "passed" if setup >= 0 and hold >= 0 else "failed"
+        drc = final.get("route__drc_errors")
+        for path, data in metrics.items():
+            if Path(path).name == "5_2_route.json":
+                drc = data.get("detailedroute__route__drc_errors", drc)
+        self.state["checks"]["routing_drc"] = "unknown"
+        if isinstance(drc, (int, float)):
+            self.state["checks"]["routing_drc"] = "passed" if drc == 0 else "failed"
+            if drc > 0:
+                self.state["checks"]["physical"] = "failed"
+        self.state["metrics"] = final
+
+    def run(self):
+        activate_environment(orfs_bin_dirs(self.cfg.orfs))
+        self.state.update(status="queued", pid=os.getpid())
+        flow_lock = None
+        previous_handlers = {}
+
+        def stop(signum, frame):
+            (self.d / "cancel").touch()
+            raise Cancelled()
+
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[signum] = signal.signal(signum, stop)
+        self.persist()
+        self.persist()
+        try:
+            if self.state["target"] != "sim":
+                flow_lock = (self.d.parent / ".physical-flow.lock").open("a")
+                while True:
+                    if (self.d / "cancel").exists():
+                        raise Cancelled()
+                    try:
+                        fcntl.flock(flow_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        self.state["queue_reason"] = (
+                            "Waiting for another physical flow in this workspace"
+                        )
+                        self.persist()
+                        time.sleep(0.2)
+            self.state.pop("queue_reason", None)
+            self.state.update(status="running", started=time.time())
+            self.persist()
+            save(self.d / "toolchain.json", doctor(self.cfg.orfs))
+            config = self.make_config()
+            target = self.state["target"]
+            compat = self.compatibility_args() if target != "sim" else []
+            physical = ["synth", "floorplan", "place", "cts", "route", "finish"]
+            stages = (
+                ["sim"]
+                if target == "sim"
+                else (
+                    ["synth", "gate_sim"]
+                    if target == "gate_sim"
+                    else physical[: physical.index(target) + 1]
+                )
+            )
+            for stage in stages:
+                entry = {"name": stage, "status": "running", "started": time.time()}
+                self.state["stages"].append(entry)
+                self.persist()
+                try:
+                    if stage in {"sim", "gate_sim"}:
+                        self.simulation(stage == "gate_sim")
+                    else:
+                        self.command(
+                            [
+                                "make",
+                                "--file=" + str(Path(self.cfg.orfs) / "Makefile"),
+                                "DESIGN_CONFIG=" + str(config),
+                                "WORK_HOME=" + str(self.d),
+                                "NUM_CORES=" + str(self.cfg.threads),
+                                "OPENROAD_EXE=" + (shutil.which("openroad") or "openroad"),
+                                "YOSYS_EXE=" + (shutil.which("yosys") or "yosys"),
+                                *compat,
+                                stage,
+                            ],
+                            Path(self.cfg.orfs),
+                            self.cfg.timeout_seconds,
+                        )
+                    entry["status"] = "completed"
+                except BaseException:
+                    entry["status"] = "cancelled" if (self.d / "cancel").exists() else "failed"
+                    raise
+                finally:
+                    entry["finished"] = time.time()
+                    self.persist()
+            self.state["status"] = "completed"
+        except Cancelled:
+            self.state["status"] = "cancelled"
+        except Exception as exc:
+            self.state.update(status="failed", error=str(exc))
+        finally:
+            try:
+                self.collect_metrics()
+            except Exception as exc:
+                self.state["metrics_error"] = str(exc)
+            self.state["finished"] = time.time()
+            self.persist()
+            if flow_lock is not None:
+                flow_lock.close()
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)

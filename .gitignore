@@ -1,0 +1,16 @@
+.venv/
+.chipflow/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+.pypirc

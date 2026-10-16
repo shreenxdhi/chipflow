@@ -1,0 +1,6 @@
+**
+!dist/
+!dist/*.whl
+!requirements-runtime.txt
+!packaging/
+!packaging/Dockerfile.smoke

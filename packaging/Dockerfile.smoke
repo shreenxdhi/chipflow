@@ -1,0 +1,12 @@
+FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+RUN apt-get update && apt-get install -y --no-install-recommends iverilog make \
+    && rm -rf /var/lib/apt/lists/*
+COPY dist/*.whl /packages/
+COPY requirements-runtime.txt /packages/requirements-runtime.txt
+RUN python -m pip install --no-cache-dir --constraint /packages/requirements-runtime.txt /packages/*.whl
+WORKDIR /workspace
+RUN chipflow --version \
+    && chipflow setup --target sim --json \
+    && chipflow init demo \
+    && chipflow run demo/chipflow.yaml --target sim --wait
+CMD ["chipflow", "serve", "--port", "8080"]

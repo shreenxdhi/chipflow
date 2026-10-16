@@ -1,0 +1,59 @@
+name: Publish package
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Reviewed release tag (for example v0.1.0)
+        required: true
+        type: string
+      registry:
+        description: Package registry
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - run: sudo apt-get update && sudo apt-get install -y iverilog make
+      - run: python -m pip install -e '.[test,dev]'
+      - name: Check tag matches package version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python -c 'import os,chipflow; assert os.environ["RELEASE_TAG"] == "v" + chipflow.__version__'
+      - run: ruff check chipflow tests scripts && ruff format --check chipflow tests scripts
+      - run: python -m pytest -q
+      - run: python -m build && twine check dist/*
+      - run: python scripts/check_distribution.py dist
+      - run: python scripts/wheel_smoke.py dist/*.whl --require-sim
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-distributions
+          path: dist/*
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ inputs.registry }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+        if: inputs.registry == 'testpypi'
+        with:
+          repository-url: https://test.pypi.org/legacy/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+        if: inputs.registry == 'pypi'

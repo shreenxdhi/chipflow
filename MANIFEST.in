@@ -1,0 +1,14 @@
+include LICENSE README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md requirements-runtime.txt
+recursive-include chipflow/static *.html *.css *.js
+recursive-include chipflow/examples *.v *.yaml
+recursive-include docs *.md
+recursive-include tests *.py
+recursive-include scripts *.py
+exclude HANDOFF.md
+prune .chipflow
+prune .venv
+prune .pytest_cache
+prune .ruff_cache
+prune build
+prune dist
+global-exclude __pycache__ *.py[cod] .DS_Store
