@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import tempfile
 from pathlib import Path
+
+from .storage import save
 
 
 def settings_path() -> Path:
@@ -51,16 +52,8 @@ def write_settings(orfs: str | None = None, bin_dirs: list[str] | None = None) -
             raise ValueError("Every --bin-dir must be an existing directory")
         value["bin_dirs"] = list(dict.fromkeys(map(str, paths)))
     path = settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, tmp = tempfile.mkstemp(dir=path.parent, prefix=".settings-")
-    try:
-        with os.fdopen(descriptor, "w") as stream:
-            json.dump(value, stream, indent=2)
-            stream.write("\n")
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    save(path, value)
     return path
 
 

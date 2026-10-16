@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .engine import STAGES, TERMINAL, Store
 from .projects import inspect_project, list_projects
+from .setup import assess, format_report
 
 LABELS = {
     "sim": "RTL simulation",
@@ -168,6 +169,10 @@ class Dashboard:
         self.colors = {}
         self.running = True
         self.confirm_run: str | None = None
+        self.setup_report = assess(versions=False)
+        self.setup_scroll = 0
+        if not self.setup_report["ready"]:
+            self.message = "Some EDA prerequisites are missing. Press s for setup suggestions, or n to check a project."
 
     @property
     def run(self) -> dict | None:
@@ -579,9 +584,7 @@ class Dashboard:
             project["path"] for project in list_projects(self.store.root.parent / "projects")
         ]
         if self.project_paths:
-            self.project_index = next(
-                (i for i, path in enumerate(self.project_paths) if "DMA_Controller" in path), 0
-            )
+            self.project_index = 0
             self.input = self.project_paths[self.project_index]
         else:
             self.project_index = -1
@@ -631,6 +634,10 @@ class Dashboard:
             self.running = False
         elif key == "?":
             self.modal = "help"
+        elif key == "s":
+            self.setup_report = assess(versions=False)
+            self.setup_scroll = 0
+            self.modal = "setup"
         elif key in ("n", "p"):
             self.modal_errors = []
             self.open_new()
@@ -723,6 +730,16 @@ class Dashboard:
         if key in ("\x1b", "\x03"):
             self.modal = None
             return
+        if self.modal == "setup":
+            if key in ("q", "s", "\n", "\r"):
+                self.modal = None
+            elif key in ("j", curses.KEY_DOWN, curses.KEY_NPAGE):
+                self.setup_scroll += 1 if key != curses.KEY_NPAGE else 8
+            elif key in ("k", curses.KEY_UP, curses.KEY_PPAGE):
+                self.setup_scroll = max(
+                    0, self.setup_scroll - (8 if key == curses.KEY_PPAGE else 1)
+                )
+            return
         if self.modal == "help":
             if key in ("q", "?", "\n", "\r"):
                 self.modal = None
@@ -791,10 +808,19 @@ class Dashboard:
             "search": "SEARCH " + getattr(self, "search_context", "").upper(),
             "cancel": "CANCEL RUN?",
             "help": "KEYBOARD GUIDE",
+            "setup": "EDA SETUP | Up/Down scroll | Enter close",
         }[self.modal]
         self.write(top + 1, left + 2, title, curses.A_REVERSE | curses.A_BOLD, width - 4)
         content = []
-        if self.modal == "help":
+        if self.modal == "setup":
+            wrapped = [
+                part
+                for line in format_report(self.setup_report).splitlines()
+                for part in (textwrap.wrap(plain(line), width - 4) or [""])
+            ]
+            self.setup_scroll = min(self.setup_scroll, max(0, len(wrapped) - (rows - 4)))
+            content = wrapped[self.setup_scroll :]
+        elif self.modal == "help":
             content = [
                 "Tab              Switch run history / details",
                 "Up/Down or j/k   Select a run or scroll focused details",
@@ -808,6 +834,7 @@ class Dashboard:
                 "R                Rerun selected completed job's saved inputs",
                 "c                Cancel selected active run (y to confirm)",
                 "r                Refresh now",
+                "s                Check EDA prerequisites and setup suggestions",
                 "q / Ctrl+C       Quit dashboard; workers keep running",
                 "",
                 "Close with Escape or Enter. No browser server is needed.",

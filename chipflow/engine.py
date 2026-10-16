@@ -19,7 +19,14 @@ import uuid
 from pathlib import Path
 
 from .config import Project, load_project, safe_make_path
-from .environment import activate_environment, discover_orfs, orfs_bin_dirs, tool_search_path
+from .environment import (
+    activate_environment,
+    discover_orfs,
+    find_tool,
+    orfs_bin_dirs,
+    tool_search_path,
+)
+from .storage import SCHEMA_VERSION, locked, process_alive, process_identity, read_state, save
 
 STAGES = ["sim", "synth", "gate_sim", "floorplan", "place", "cts", "route", "finish"]
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
@@ -35,10 +42,22 @@ def json_safe(value):
     return value
 
 
-def save(path: Path, value):
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(value, indent=2))
-    tmp.replace(path)
+def file_hash(path):
+    with Path(path).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def verify_inputs(directory):
+    manifest = json.loads((directory / "manifest.json").read_text())
+    if (
+        manifest.get("project_sha256")
+        and file_hash(directory / "project.json") != manifest["project_sha256"]
+    ):
+        raise ValueError("Saved configuration failed integrity check: project.json")
+    for relative, expected in manifest["input_sha256"].items():
+        path = (directory / relative).resolve()
+        if not path.is_relative_to(directory) or not path.is_file() or file_hash(path) != expected:
+            raise ValueError(f"Saved input failed integrity check: {relative}")
 
 
 def probe(argv, cwd=None):
@@ -61,7 +80,7 @@ def doctor(orfs: str | None = None):
         "klayout": ["-v"],
         "make": ["--version"],
     }.items():
-        exe = shutil.which(name)
+        exe = find_tool(name, orfs_bin_dirs(root))
         tools[name] = {"path": exe, "version": probe([exe, *args]) if exe else None}
     return {
         "flow": str(flow),
@@ -97,23 +116,42 @@ class Store:
 
     def get(self, run_id):
         d = self.directory(run_id)
-        state = json.loads((d / "run.json").read_text())
-        if state["status"] not in TERMINAL and time.time() - state["created"] > 5:
-            try:
-                pid = state.get("pid") or 999999999
-                os.kill(pid, 0)
-                proc = Path(f"/proc/{pid}")
-                if proc.exists():
-                    if (proc / "stat").read_text().split(") ", 1)[1].startswith("Z"):
-                        raise ProcessLookupError()
-                    if str(d).encode() not in (proc / "cmdline").read_bytes():
-                        raise ProcessLookupError()
-            except (ProcessLookupError, FileNotFoundError):
+        with locked(d / ".state.lock"):
+            state = json_safe(read_state(d / "run.json"))
+            if (
+                state.get("id") != run_id
+                or state.get("target") not in STAGES
+                or not isinstance(state.get("name"), str)
+            ):
+                raise ValueError("Run metadata has an invalid ID, target, or name")
+            dead = False
+            if state["status"] not in TERMINAL:
+                if state.get("worker_identity"):
+                    dead = not process_alive(state["worker_identity"])
+                elif time.time() - state["created"] > 5:
+                    # Compatibility with history written before worker identities.
+                    pid = state.get("pid") or 999999999
+                    identity = process_identity(pid)
+                    try:
+                        dead = (
+                            not identity
+                            or identity["state"] == "Z"
+                            or str(d).encode() not in Path(f"/proc/{pid}/cmdline").read_bytes()
+                        )
+                    except FileNotFoundError:
+                        dead = True
+            if dead:
                 state["status"] = "interrupted"
-                state["error"] = "Worker exited unexpectedly; inspect logs."
+                state["error"] = (
+                    "Worker exited unexpectedly; tools are stopped by the command guardian. Inspect logs and retry."
+                )
+                state["finished"] = time.time()
+                state.pop("queue_reason", None)
                 for stage in state["stages"]:
                     if stage["status"] == "running":
                         stage["status"] = "interrupted"
+                        stage["finished"] = state["finished"]
+                save(d / "run.json", state)
         return state
 
     def history(self):
@@ -143,7 +181,9 @@ class Store:
 
     def retry(self, run_id):
         previous = self.get(run_id)
-        return self.start(self.directory(run_id) / "project.json", previous["target"])
+        directory = self.directory(run_id)
+        verify_inputs(directory)
+        return self.start(directory / "project.json", previous["target"])
 
     def cancel(self, run_id):
         state = self.get(run_id)
@@ -163,10 +203,17 @@ class Store:
         return [
             {"path": str(p.relative_to(root)), "bytes": p.stat().st_size}
             for p in sorted(root.rglob("*"))
-            if p.is_file() and not p.is_symlink() and p.name not in {"cancel", "run.tmp"}
+            if p.is_file()
+            and not p.is_symlink()
+            and not p.name.startswith(".")
+            and p.name not in {"cancel", "run.tmp"}
         ]
 
     def start(self, config_path: Path, target="sim"):
+        with locked(self.root / ".store.lock"):
+            return self._start(config_path, target)
+
+    def _start(self, config_path: Path, target):
         if target not in STAGES:
             raise ValueError("unknown target")
         activate_environment()
@@ -195,6 +242,7 @@ class Store:
         d = self.root / run_id
         safe_make_path(d)
         d.mkdir(mode=0o700)
+        launched = False
         try:
             hashes = {}
 
@@ -215,9 +263,7 @@ class Store:
                     shutil.copy2(original, dest)
                 for file in dest.rglob("*") if dest.is_dir() else [dest]:
                     if file.is_file():
-                        hashes[str(file.relative_to(d))] = hashlib.sha256(
-                            file.read_bytes()
-                        ).hexdigest()
+                        hashes[str(file.relative_to(d))] = file_hash(file)
                 return str(dest)
 
             cfg = project.model_dump()
@@ -241,16 +287,23 @@ class Store:
                 cfg["sdc"] = str(sdc)
                 hashes[str(sdc.relative_to(d))] = hashlib.sha256(sdc.read_bytes()).hexdigest()
             cfg["orfs"] = str(flow)
+            if cfg["physical"].get("ADDER_MAP_FILE"):
+                cfg["physical"]["ADDER_MAP_FILE"] = snapshot(
+                    cfg["physical"]["ADDER_MAP_FILE"], "adder_map", 0
+                )
             save(d / "project.json", cfg)
             save(
                 d / "manifest.json",
                 {
+                    "schema_version": SCHEMA_VERSION,
                     "source_config": str(config_path.expanduser().resolve()),
                     "input_sha256": hashes,
+                    "project_sha256": file_hash(d / "project.json"),
                     "configuration": project.model_dump(),
                 },
             )
             state = {
+                "schema_version": SCHEMA_VERSION,
                 "id": run_id,
                 "name": project.name,
                 "target": target,
@@ -263,16 +316,25 @@ class Store:
             save(d / "run.json", state)
             log = (d / "worker.log").open("ab")
             with log:
-                subprocess.Popen(
+                process = subprocess.Popen(
                     [sys.executable, "-m", "chipflow.worker", str(d)],
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                     env={**os.environ, "PATH": tool_search_path(orfs_bin_dirs(flow))},
                 )
+                launched = process is not None
+            if process is not None:
+                with locked(d / ".state.lock"):
+                    state = read_state(d / "run.json")
+                    if not state.get("pid") and state["status"] not in TERMINAL:
+                        state["pid"] = process.pid
+                        state["worker_identity"] = process_identity(process.pid)
+                        save(d / "run.json", state)
             return state
         except Exception:
-            shutil.rmtree(d)
+            if not launched:
+                shutil.rmtree(d)
             raise
 
 
@@ -285,9 +347,11 @@ class Worker:
         self.d = directory
         self.state = json.loads((directory / "run.json").read_text())
         self.cfg = Project.model_validate_json((directory / "project.json").read_text())
+        self.flow_lock = None
 
     def persist(self):
-        save(self.d / "run.json", self.state)
+        with locked(self.d / ".state.lock"):
+            save(self.d / "run.json", self.state)
 
     def command(self, argv, cwd, timeout):
         if (self.d / "cancel").exists():
@@ -297,26 +361,49 @@ class Worker:
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
             env["QT_QPA_PLATFORM"] = "offscreen"
-            process = subprocess.Popen(
-                argv, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, env=env, start_new_session=True
-            )
-            start = time.monotonic()
+            parent_fd, worker_fd = os.pipe()
+            inherited = (parent_fd,) + ((self.flow_lock.fileno(),) if self.flow_lock else ())
+            try:
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-m",
+                        "chipflow.runner",
+                        "--parent-fd",
+                        str(parent_fd),
+                        "--timeout",
+                        str(timeout),
+                        "--",
+                        *argv,
+                    ],
+                    cwd=cwd,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    env=env,
+                    start_new_session=True,
+                    pass_fds=inherited,
+                )
+            except BaseException:
+                os.close(worker_fd)
+                raise
+            finally:
+                os.close(parent_fd)
             try:
                 while process.poll() is None:
                     if (self.d / "cancel").exists():
                         raise Cancelled()
-                    if time.monotonic() - start > timeout:
-                        raise TimeoutError(f"command exceeded {timeout}s")
                     time.sleep(0.1)
                 if (self.d / "cancel").exists():
                     raise Cancelled()
+                if process.returncode == 124:
+                    raise TimeoutError(f"command exceeded {timeout}s")
                 if process.returncode:
                     raise RuntimeError(f"command exited {process.returncode}")
             finally:
-                # Also terminate any descendants left after the command exits.
+                os.close(worker_fd)
                 try:
                     os.killpg(process.pid, signal.SIGTERM)
-                    process.wait(timeout=2)
+                    process.wait(timeout=5)
                 except ProcessLookupError:
                     pass
                 except subprocess.TimeoutExpired:
@@ -345,11 +432,21 @@ class Worker:
         self.command([*argv, *sources, *sim.testbench], self.d, sim.timeout_seconds)
         offset = (self.d / "console.log").stat().st_size
         self.command(["vvp", str(output)], self.d, sim.timeout_seconds)
+        found = False
+        marker = sim.pass_marker.encode()
         with (self.d / "console.log").open("rb") as log:
             log.seek(offset)
             # Do not count the command line itself as a pass marker.
-            result = log.read().decode(errors="replace").split("\n", 2)[-1]
-        if sim.pass_marker not in result:
+            log.readline()
+            log.readline()
+            tail = b""
+            while block := log.read(256 * 1024):
+                data = tail + block
+                if marker in data:
+                    found = True
+                    break
+                tail = data[-max(len(marker) - 1, 0) :] if len(marker) > 1 else b""
+        if not found:
             raise RuntimeError(f"simulation exited without pass marker {sim.pass_marker!r}")
 
     def compatibility_args(self):
@@ -425,6 +522,36 @@ class Worker:
         path.write_text("".join(f"export {key} = {value}\n" for key, value in entries.items()))
         return path
 
+    def validate_outputs(self, stage):
+        required = {
+            "synth": ["1_2_yosys.v"],
+            "floorplan": ["2_floorplan.odb"],
+            "place": ["3_place.odb"],
+            "cts": ["4_cts.odb"],
+            "route": ["5_route.odb"],
+            "finish": ["6_final.odb", "6_final.gds"],
+        }
+        root = self.d / "results" / self.cfg.platform / self.cfg.top / "base"
+        outputs = []
+        for name in required[stage]:
+            path = root / name
+            if not path.is_file() or path.is_symlink() or not path.stat().st_size:
+                raise RuntimeError(
+                    f"{stage} exited successfully but required output is missing or empty: {name}"
+                )
+            if name.endswith(".gds"):
+                with path.open("rb") as stream:
+                    if stream.read(4) != b"\x00\x06\x00\x02":
+                        raise RuntimeError(f"Final layout is not a GDSII stream: {name}")
+            outputs.append(
+                {
+                    "path": str(path.relative_to(self.d)),
+                    "bytes": path.stat().st_size,
+                    "sha256": file_hash(path),
+                }
+            )
+        self.state["stages"][-1]["outputs"] = outputs
+
     def collect_metrics(self):
         metrics = {}
         for p in sorted((self.d / "logs").rglob("*.json")):
@@ -454,7 +581,12 @@ class Worker:
             if Path(path).name == "5_2_route.json":
                 drc = data.get("detailedroute__route__drc_errors", drc)
         self.state["checks"]["routing_drc"] = "unknown"
-        if isinstance(drc, (int, float)):
+        if (
+            isinstance(drc, (int, float))
+            and not isinstance(drc, bool)
+            and math.isfinite(drc)
+            and drc >= 0
+        ):
             self.state["checks"]["routing_drc"] = "passed" if drc == 0 else "failed"
             if drc > 0:
                 self.state["checks"]["physical"] = "failed"
@@ -462,21 +594,26 @@ class Worker:
 
     def run(self):
         activate_environment(orfs_bin_dirs(self.cfg.orfs))
-        self.state.update(status="queued", pid=os.getpid())
+        self.state.update(
+            status="queued", pid=os.getpid(), worker_identity=process_identity(os.getpid())
+        )
         flow_lock = None
         previous_handlers = {}
 
         def stop(signum, frame):
             (self.d / "cancel").touch()
-            raise Cancelled()
 
         for signum in (signal.SIGTERM, signal.SIGINT):
             previous_handlers[signum] = signal.signal(signum, stop)
         self.persist()
-        self.persist()
         try:
+            if (self.d / "manifest.json").exists():
+                verify_inputs(self.d)
+            if (self.d / "cancel").exists():
+                raise Cancelled()
             if self.state["target"] != "sim":
                 flow_lock = (self.d.parent / ".physical-flow.lock").open("a")
+                self.flow_lock = flow_lock
                 while True:
                     if (self.d / "cancel").exists():
                         raise Cancelled()
@@ -529,6 +666,7 @@ class Worker:
                             Path(self.cfg.orfs),
                             self.cfg.timeout_seconds,
                         )
+                        self.validate_outputs(stage)
                     entry["status"] = "completed"
                 except BaseException:
                     entry["status"] = "cancelled" if (self.d / "cancel").exists() else "failed"
@@ -536,6 +674,8 @@ class Worker:
                 finally:
                     entry["finished"] = time.time()
                     self.persist()
+            if (self.d / "cancel").exists():
+                raise Cancelled()
             self.state["status"] = "completed"
         except Cancelled:
             self.state["status"] = "cancelled"
@@ -550,5 +690,6 @@ class Worker:
             self.persist()
             if flow_lock is not None:
                 flow_lock.close()
+                self.flow_lock = None
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)

@@ -1,16 +1,20 @@
+import logging
+import os
 from pathlib import Path
-from urllib.parse import urlparse
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from . import __version__
 from .config import Project
-from .engine import Store
+from .engine import TERMINAL, Store
 from .environment import activate_environment
 from .projects import PreflightError, create_project, inspect_project, list_projects, workspace
 from .setup import assess
+from .storage import SCHEMA_VERSION, read_log
+from .web_security import LocalBoundary
 
 
 class StartRun(BaseModel):
@@ -22,24 +26,28 @@ class StartRun(BaseModel):
 def create_app(root: Path | str = ".chipflow/runs"):
     activate_environment()
     store = Store(root)
-    app = FastAPI(title="Chipflow", version="0.1.0")
+    app = FastAPI(title="Chipflow", version=__version__, docs_url=None, redoc_url=None)
+    app.add_middleware(LocalBoundary)
     app.state.store = store
     projects_folder = store.root.parent / "projects"
 
-    @app.middleware("http")
-    async def local_only(request: Request, call_next):
-        host = request.url.hostname
-        origin = request.headers.get("origin")
-        if host not in {"localhost", "127.0.0.1", "::1"}:
-            return JSONResponse({"detail": "Loopback host required"}, status_code=403)
-        if origin and (
-            urlparse(origin).netloc != request.url.netloc
-            or urlparse(origin).scheme != request.url.scheme
-        ):
-            return JSONResponse({"detail": "Same-origin requests required"}, status_code=403)
-        if request.headers.get("sec-fetch-site") == "cross-site":
-            return JSONResponse({"detail": "Cross-site requests rejected"}, status_code=403)
-        return await call_next(request)
+    @app.get("/api/health")
+    def health():
+        if not store.root.is_dir() or not os.access(store.root, os.R_OK | os.W_OK | os.X_OK):
+            return JSONResponse(
+                {"status": "unavailable", "detail": "Run store is not accessible"}, status_code=503
+            )
+        return {"status": "ok", "version": __version__, "run_schema_version": SCHEMA_VERSION}
+
+    @app.exception_handler(OSError)
+    async def storage_failure(request, exc):
+        logging.getLogger(__name__).error("Local storage access failed: %s", exc)
+        return JSONResponse(
+            {
+                "detail": "Local storage access failed. Check permissions, free space, and the server log."
+            },
+            status_code=503,
+        )
 
     @app.exception_handler(FileNotFoundError)
     async def missing(request, exc):
@@ -105,10 +113,9 @@ def create_app(root: Path | str = ".chipflow/runs"):
         path = store.directory(run_id) / "console.log"
         if not path.exists():
             return {"text": "", "offset": 0}
-        with path.open("rb") as f:
-            f.seek(min(offset, path.stat().st_size))
-            data = f.read(256 * 1024)
-            return {"text": data.decode(errors="replace"), "offset": f.tell()}
+        path = store.artifact(run_id, "console.log")
+        result = read_log(path, offset, final=store.get(run_id)["status"] in TERMINAL)
+        return {"text": result["text"], "offset": result["offset"]}
 
     @app.get("/api/runs/{run_id}/artifacts")
     def artifacts(run_id: str):

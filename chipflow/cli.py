@@ -11,24 +11,29 @@ from . import __version__
 from .engine import STAGES, TERMINAL, Store, doctor
 from .environment import activate_environment, init_project, write_settings
 from .setup import assess, format_report
+from .storage import read_log
 
 
 def wait_for_run(store, run_id):
     offset = 0
     try:
         while True:
+            state = store.get(run_id)
+            finished = state["status"] in TERMINAL
+            more = False
+            progressed = False
             path = store.directory(run_id) / "console.log"
             if path.exists():
-                with path.open("rb") as stream:
-                    stream.seek(offset)
-                    sys.stdout.write(stream.read().decode(errors="replace"))
-                    sys.stdout.flush()
-                    offset = stream.tell()
-            state = store.get(run_id)
-            if state["status"] in TERMINAL:
+                chunk = read_log(path, offset, final=finished)
+                sys.stdout.write(chunk["text"])
+                sys.stdout.flush()
+                progressed = chunk["offset"] != offset
+                offset, more = chunk["offset"], chunk["more"]
+            if finished and not more:
                 print(json.dumps(state, indent=2))
                 return 0 if state["status"] == "completed" else 1
-            time.sleep(0.25)
+            if not more or not progressed:
+                time.sleep(0.25)
     except KeyboardInterrupt:
         store.cancel(run_id)
         print("Cancellation requested.", file=sys.stderr)
@@ -77,6 +82,12 @@ def parser():
     item.add_argument("--target", choices=STAGES, default="sim")
     item.add_argument("--wait", action="store_true")
     commands.add_parser("history", help="list saved runs as JSON")
+    item = commands.add_parser("backup", help="back up completed run history and saved inputs")
+    item.add_argument("archive", type=Path)
+    item = commands.add_parser(
+        "restore", help="restore a verified backup into an empty run directory"
+    )
+    item.add_argument("archive", type=Path)
     for name in ["status", "cancel", "artifacts", "logs", "retry"]:
         item = commands.add_parser(name)
         item.add_argument("id")
@@ -84,7 +95,7 @@ def parser():
     item.add_argument("left")
     item.add_argument("right")
     item = commands.add_parser("serve", help="start the local browser dashboard")
-    item.add_argument("--port", type=int, default=8080)
+    item.add_argument("--port", type=int, choices=range(1, 65536), metavar="PORT", default=8080)
     return root
 
 
@@ -126,6 +137,12 @@ def main(argv=None):
             uvicorn.run(create_app(args.runs), host="127.0.0.1", port=args.port)
             return 0
         store = Store(args.runs)
+        if args.command in {"backup", "restore"}:
+            from .backup import backup, restore
+
+            result = (backup if args.command == "backup" else restore)(store, args.archive)
+            print(json.dumps(result, indent=2))
+            return 0
         if args.command == "verify":
             destination = store.root.parent / "verification" / uuid.uuid4().hex
             config = init_project(destination)

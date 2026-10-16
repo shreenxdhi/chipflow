@@ -93,3 +93,21 @@ def test_invalid_saved_settings_are_explained(local_settings):
     path.write_text('{"version":1,"bin_dirs":"not-a-list"}')
     with pytest.raises(ValueError, match="bin_dirs"):
         read_settings()
+
+
+def test_broken_executable_is_not_reported_ready(local_settings, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("chipflow.setup.find_tool", lambda name, *a: "/bin/" + name)
+    monkeypatch.setattr(
+        "chipflow.setup.subprocess.run",
+        lambda *a, **k: SimpleNamespace(stdout="", stderr="missing shared library", returncode=127),
+    )
+    report = assess(target="sim")
+    assert not report["ready"]
+    assert all(
+        check["status"] == "broken"
+        for check in report["checks"]
+        if check["name"] in {"iverilog", "vvp"}
+    )
+    assert "Repair" in report["checks"][0]["action"]

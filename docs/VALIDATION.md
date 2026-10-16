@@ -31,8 +31,8 @@ Icarus and the wheel in a fresh Linux image, runs prerequisite checks and a real
 simulation, and serves the installed dashboard. Homebrew has its own formula
 validation; a Ruby syntax check alone is not equivalent to an installed formula test.
 
-The release remains beta until the documented release checks pass on supported
-hosts. New designs, tool revisions, and platform integrations require validation.
+Stable status applies to the [documented operations contract](OPERATIONS.md).
+New designs, tool revisions, and platform integrations require validation.
 
 ## Release candidate checks
 

@@ -1,5 +1,6 @@
 """Local project discovery and preflight checks for the dashboard."""
 
+import os
 import uuid
 from pathlib import Path
 
@@ -47,6 +48,8 @@ def inspect_project(path: Path, target: str):
     groups = [("RTL source", project.rtl, False), ("Include folder", project.include_dirs, True)]
     if project.sdc:
         groups.append(("Timing constraints", [project.sdc], False))
+    if project.physical.get("ADDER_MAP_FILE"):
+        groups.append(("Adder mapping", [project.physical["ADDER_MAP_FILE"]], False))
     if project.simulation:
         groups.extend(
             [
@@ -145,8 +148,8 @@ def create_project(folder: Path, project: Project):
     if data["simulation"]:
         for field in ["testbench", "cell_models"]:
             data["simulation"][field] = [str(resolve(base, p)) for p in data["simulation"][field]]
-    folder.mkdir(parents=True, exist_ok=True)
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = folder / f"{project.name}-{uuid.uuid4().hex[:8]}.yaml"
-    with path.open("x") as f:
+    with open(path, "x", opener=lambda p, flags: os.open(p, flags, 0o600)) as f:
         yaml.safe_dump(data, f, sort_keys=False)
     return {"path": str(path.resolve()), "name": project.name}
