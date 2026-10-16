@@ -53,7 +53,10 @@ def main():
             )
 
         assert re.fullmatch(r"chipflow \d+\.\d+\.\d+\n", run("--version").stdout)
-        run("init", "demo")
+        assert len(json.loads(run("guide", "--json").stdout)["lessons"]) == 7
+        run("init", "demo", "--expert")
+        assert (workspace / "demo" / "tcl" / "common.tcl").is_file()
+        assert (workspace / "demo" / "GUIDE.md").is_file()
         assert (workspace / "demo" / "counter.v").is_file()
         setup = run("setup", "--target", "sim", "--json", check=False)
         report = json.loads(setup.stdout)
@@ -63,6 +66,7 @@ def main():
         if simulation:
             result = run("run", "demo/chipflow.yaml", "--target", "sim", "--wait")
             assert "PASS: counter self-check" in result.stdout
+            assert "completed" in run("quickstart", "first-chip").stdout
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0
+
+- Beginner quickstart runs a real self-checking counter simulation after checking
+  prerequisites; an interactive wizard configures users' own RTL.
+- A seven-step browser learning path, shared CLI/terminal guide, and plain-language
+  glossary explain outputs and review tasks from simulation to GDSII.
+- Expert mode adds a complete YAML copy editor and searchable installed ORFS
+  settings, with native Tcl hooks and policy script overrides.
+- Tcl bundles, shared helpers, parameters, and declared library files are preserved
+  for execution, retry, and backup/restore. Preflight checks native availability.
+- Project copies preserve complete configurations and resolve their input paths;
+  manager-owned flow paths and unsafe Make expressions remain protected.
+
 ## 1.0.0
 
 Stable release for the documented single-user Linux support contract.

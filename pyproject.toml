@@ -49,7 +49,7 @@ dependencies = {file = ["requirements-runtime.txt"]}
 include = ["chipflow*"]
 
 [tool.setuptools.package-data]
-chipflow = ["static/*", "examples/counter/*.v", "examples/counter/*.yaml"]
+chipflow = ["static/*", "examples/counter/*.v", "examples/counter/*.yaml", "examples/counter/*.md", "examples/counter/tcl/*.tcl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

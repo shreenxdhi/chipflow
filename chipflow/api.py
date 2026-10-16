@@ -2,16 +2,26 @@ import logging
 import os
 from pathlib import Path
 
+import yaml
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from . import __version__
-from .config import Project
+from .config import Project, load_project
+from .customization import TCL_POINTS, supported_points, variable_catalog
 from .engine import TERMINAL, Store
-from .environment import activate_environment
-from .projects import PreflightError, create_project, inspect_project, list_projects, workspace
+from .environment import activate_environment, discover_orfs, flow_path, init_project
+from .learning import GLOSSARY, LESSONS
+from .projects import (
+    PreflightError,
+    absolute_project,
+    create_project,
+    inspect_project,
+    list_projects,
+    workspace,
+)
 from .setup import assess
 from .storage import SCHEMA_VERSION, read_log
 from .web_security import LocalBoundary
@@ -21,6 +31,11 @@ class StartRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
     config: str
     target: str = "sim"
+
+
+class ProjectYaml(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    yaml: str
 
 
 def create_app(root: Path | str = ".chipflow/runs"):
@@ -76,6 +91,37 @@ def create_app(root: Path | str = ".chipflow/runs"):
     def setup_report():
         return assess(versions=False)
 
+    @app.get("/api/guide")
+    def guide():
+        return {"lessons": LESSONS, "glossary": GLOSSARY}
+
+    @app.get("/api/reference")
+    def reference(orfs: str | None = None):
+        root = orfs or discover_orfs()
+        available = supported_points(flow_path(root))
+        return {
+            "hooks": {
+                name: {**info, "available": name in available} for name, info in TCL_POINTS.items()
+            },
+            "variables": variable_catalog(root),
+        }
+
+    @app.post("/api/projects/starter", status_code=201)
+    def starter():
+        import uuid
+
+        report = assess(target="sim", versions=False)
+        if not report["ready"]:
+            raise PreflightError(
+                [
+                    check["detail"] + ". " + check["action"]
+                    for check in report["checks"]
+                    if check["status"] != "available"
+                ]
+            )
+        config = init_project(projects_folder / ("first-chip-" + uuid.uuid4().hex[:8]))
+        return {"path": str(config), "name": "counter_demo"}
+
     @app.get("/api/projects")
     def projects():
         return list_projects(projects_folder)
@@ -83,6 +129,24 @@ def create_app(root: Path | str = ".chipflow/runs"):
     @app.post("/api/projects", status_code=201)
     def project_create(project: Project):
         return create_project(projects_folder, project)
+
+    @app.get("/api/projects/yaml")
+    def project_yaml(config: str):
+        project, base = load_project(Path(config))
+        return {
+            "yaml": yaml.safe_dump(absolute_project(project, base), sort_keys=False),
+            "source": str(Path(config).expanduser().resolve()),
+        }
+
+    @app.post("/api/projects/yaml", status_code=201)
+    def project_yaml_save(body: ProjectYaml):
+        try:
+            data = yaml.safe_load(body.yaml)
+        except yaml.YAMLError as exc:
+            raise ValueError(
+                "The project YAML could not be read. Check its indentation and syntax."
+            ) from exc
+        return create_project(projects_folder, Project.model_validate(data))
 
     @app.post("/api/projects/inspect")
     def project_inspect(body: StartRun):

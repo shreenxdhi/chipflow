@@ -23,13 +23,16 @@ are supported. The refresh interval defaults to one second (`--refresh 0.2` to `
 | R | Rerun preserved inputs from a terminal-state job |
 | c | Cancel an active job, then y to confirm |
 | r | Refresh immediately |
+| s | Check prerequisites and installation suggestions |
+| l | Read the learning path and VLSI glossary |
 | ? | Keyboard help |
 | q or Ctrl+C | Exit the dashboard without stopping workers |
 
 In the launch form, Up/Down chooses saved projects; Ctrl+U clears the path. Tab
 focuses the target selector, where Left/Right cycles stages. Enter validates and
 launches. Errors leave the form open. The browser's guided form can create new
-project files; the terminal launches existing configurations.
+project files; `chipflow wizard` creates a configuration interactively for your RTL.
+`chipflow quickstart first-chip` creates and simulates a working counter.
 
 Log display initially reads the last 128 KiB and retains up to 8,000 lines. Pausing
 keeps the inspected text stationary while the worker continues writing. Search

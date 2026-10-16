@@ -14,13 +14,13 @@ brew install shreenxdhi/chipflow/chipflow
 chipflow setup
 ```
 
-The [1.0.0 release](https://github.com/shreenxdhi/chipflow/releases/tag/v1.0.0)
+The [1.1.0 release](https://github.com/shreenxdhi/chipflow/releases/tag/v1.1.0)
 and [Homebrew tap](https://github.com/shreenxdhi/homebrew-chipflow) are available.
 The first Homebrew installation builds dependencies from source and may take
 several minutes. Python users with Python 3.11 or newer can install the tagged source:
 
 ```sh
-pipx install 'git+https://github.com/shreenxdhi/chipflow.git@v1.0.0'
+pipx install 'git+https://github.com/shreenxdhi/chipflow.git@v1.1.0'
 ```
 
 PyPI publication is pending maintainer account configuration; `pipx install chipflow`
@@ -55,18 +55,53 @@ chipflow verify --target finish
 
 The second command runs a real Nangate45 physical flow and may take several minutes.
 
-## First design run
+## Start learning
 
 ```sh
-chipflow init counter-demo
-chipflow run counter-demo/chipflow.yaml --target sim --wait
-chipflow run counter-demo/chipflow.yaml --target finish --wait
+chipflow quickstart first-chip
+chipflow guide
 ```
 
-`init` copies a bundled self-checking counter example into a new directory. It never
-overwrites an existing directory. Edit the generated configuration for your own RTL,
-constraints, and platform. The example is available after wheel installation, not
-only from a source checkout.
+`quickstart` checks Icarus Verilog, creates a self-checking counter, and runs a
+real RTL simulation. It prints the result and where to find the outputs. It never
+overwrites an existing directory. The generated `GUIDE.md` explains the files,
+flow stages, and what to inspect at each stage.
+
+In the browser, choose **Learning** and click **Start learning with a counter**.
+The seven-step path explains simulation through GDSII, tracks completed stages,
+and offers the next run. Missing prerequisites appear before execution. Each
+physical target includes its earlier prerequisites in a new independent run.
+
+For your own RTL, use the interactive configuration wizard:
+
+```sh
+chipflow wizard chipflow.yaml
+chipflow run chipflow.yaml --target sim --wait
+```
+
+After configuring physical-design tools with `chipflow setup`, continue with
+`chipflow run first-chip/chipflow.yaml --target finish --wait`, or create and run
+another full example with `chipflow quickstart another-chip --target finish`.
+See the [beginner guide](docs/GETTING_STARTED.md).
+
+## Configure an experienced workflow
+
+```sh
+chipflow init custom-chip --expert
+chipflow hooks
+chipflow variables --search clock
+```
+
+Expert projects support native ORFS Tcl hooks, replacement policy scripts, typed
+flow-variable overrides, additional library files, complete SDC constraints,
+multiple clocks, and configurable resource/time limits. Scripts, sibling helpers,
+and declared file inputs are copied and hashed with each run, so retries use the
+preserved configuration.
+
+Choose **Expert** in the browser for the complete YAML editor and searchable
+installed-flow reference. Saving creates a project copy. The guided form also
+supports Tcl bundles and native settings. See [custom Tcl](docs/CUSTOMIZATION.md)
+and the [configuration reference](docs/CONFIGURATION.md).
 
 ## Dashboards
 
@@ -162,7 +197,7 @@ clock-only counter constraints do not establish I/O timing coverage.
 
 The 1.x release supports single-user Linux operation with trusted inputs and
 toolchains. Paths used by ORFS must avoid spaces and Make/shell metacharacters. Automatic
-EDA installation, arbitrary PDK hooks, remote workers, and a container execution
+EDA installation, automatic PDK integration, remote workers, and a container execution
 backend are not included. A container is used to test clean manager installation.
 See [operations](docs/OPERATIONS.md) for the supported host/toolchain matrix,
 upgrades, backups, crash recovery, monitoring, and maintenance.

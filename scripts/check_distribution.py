@@ -15,7 +15,7 @@ def check(name, data):
     assert not any(part in {".venv", ".chipflow", "__pycache__", ".git"} for part in parts), name
     assert not name.endswith(("HANDOFF.md", ".pyc", ".log")), name
     if name.endswith(
-        (".py", ".md", ".json", ".yaml", ".html", ".js", ".css", ".toml", ".txt", ".rb")
+        (".py", ".md", ".json", ".yaml", ".html", ".js", ".css", ".toml", ".txt", ".rb", ".tcl")
     ):
         assert PRIVATE_HOME not in data, f"Private/development content in {name}"
 
@@ -31,6 +31,9 @@ def main():
                     check(name, archive.read(name))
                 assert "chipflow/examples/counter/chipflow.yaml" in archive.namelist()
                 assert "chipflow/static/index.html" in archive.namelist()
+                assert "chipflow/examples/counter/GUIDE.md" in archive.namelist()
+                assert "chipflow/examples/counter/tcl/common.tcl" in archive.namelist()
+                assert "chipflow/examples/counter/tcl/after_cts.tcl" in archive.namelist()
                 metadata_name = next(
                     name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
                 )

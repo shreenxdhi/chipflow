@@ -21,6 +21,8 @@ const checked = new Set(), cancelling = new Set();
 let requestedRun = new URLSearchParams(location.search).get('run');
 let requestedTab = new URLSearchParams(location.search).get('tab');
 let liveKey = '';
+let guideData = null, guideConfig = '', guideBusy = false, referenceData = null, learningKey = '';
+try { guideConfig = localStorage.getItem('chipflow.guideConfig') || ''; } catch {}
 function updateLocation() {
   if (!selected) return; const url = new URL(location.href); url.searchParams.set('run', selected); url.searchParams.set('tab', tab); history.replaceState(null, '', url);
 }
@@ -346,7 +348,7 @@ async function refresh() {
       let previous; try { previous = localStorage.getItem('chipflow.selected'); } catch {}
       select(runs.find(run => run.id === previous)?.id || runs[0]?.id || null);
     }
-    renderRuns(); renderLiveRun(); updateElapsed();
+    renderRuns(); renderLiveRun(); renderLearning(); updateElapsed();
     if (selected) {
       const id = selected, run = runs.find(item => item.id === id);
       const logs = await api(`/api/runs/${id}/logs?offset=${offset}`);
@@ -427,7 +429,7 @@ for (const id of ['help-open', 'footer-help']) $('#' + id).onclick = () => openD
 for (const id of ['tools-open', 'connection']) $('#' + id).onclick = () => openDialog('tools-dialog');
 for (const button of document.querySelectorAll('[data-close]')) button.onclick = () => $('#' + button.dataset.close).close();
 for (const dialog of document.querySelectorAll('dialog')) dialog.addEventListener('click', event => { if (event.target === dialog) { const box = dialog.getBoundingClientRect(); if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close(); } });
-const fieldIds = ['name', 'top', 'rtl', 'tb', 'simtop', 'marker', 'clock', 'period', 'platform', 'orfs', 'sdc', 'die', 'core', 'density', 'threads', 'includes', 'models'];
+const fieldIds = ['name', 'top', 'rtl', 'tb', 'simtop', 'marker', 'clock', 'period', 'platform', 'orfs', 'sdc', 'die', 'core', 'density', 'threads', 'includes', 'models', 'tcldir', 'hooks', 'parameters', 'variables', 'files'];
 function lines(value) { return value.split('\n').map(s => s.trim()).filter(Boolean); }
 function populateEditor(project = null, inputs = []) {
   editorBase = project;
@@ -437,8 +439,14 @@ function populateEditor(project = null, inputs = []) {
     const paths = kind => inputs.filter(i => i.kind === kind).map(i => i.path).join('\n');
     Object.assign(defaults, {name: project.name, top: project.top, rtl: paths('RTL source') || project.rtl.join('\n'), tb: paths('Testbench'), simtop: project.simulation?.top || '', marker: project.simulation?.pass_marker || 'PASS', clock: project.clocks[0]?.port || '', period: project.clocks[0]?.period_ns || '', platform: project.platform, orfs: project.orfs, sdc: paths('Timing constraints'), die: project.physical.DIE_AREA ?? '', core: project.physical.CORE_AREA ?? '', density: project.physical.PLACE_DENSITY ?? '', threads: project.threads, includes: paths('Include folder'), models: paths('Cell model')});
   }
+  const pairs = values => Object.entries(values || {}).map(([name, value]) => `${name}=${Array.isArray(value) ? value.join(',') : value}`).join('\n');
+  defaults.tcldir = inputs.find(input => input.kind === 'Tcl directory')?.path || project?.tcl?.directory || '';
+  defaults.hooks = pairs(project?.tcl?.hooks); defaults.parameters = pairs(project?.tcl?.parameters);
+  defaults.variables = pairs(project?.orfs_variables);
+  defaults.files = pairs(Object.fromEntries(Object.entries(project?.orfs_files || {}).map(([name, files]) => [name, inputs.filter(input => input.kind === 'ORFS file: ' + name).map(input => input.path).length ? inputs.filter(input => input.kind === 'ORFS file: ' + name).map(input => input.path) : files])));
   for (const [key, value] of Object.entries(defaults)) $('#p-' + key).value = value;
   $('#project-heading').textContent = project ? 'Edit a project copy' : 'Create a project';
+  const extra = project && (project.tcl || Object.keys(project.orfs_variables || {}).length || Object.keys(project.orfs_files || {}).length); $('#project-dialog .advanced').open = $('#experience').value === 'expert' || Boolean(extra);
   clockRequirements(); openDialog('project-dialog'); $('#p-name').focus();
 }
 function clockRequirements() {
@@ -468,6 +476,11 @@ $('#project-form').onsubmit = async event => {
       clocks: values.clock && values.period ? [{port: values.clock, period_ns: Number(values.period)}, ...(editorBase?.clocks.slice(1) || [])] : [],
       sdc: values.sdc || null, include_dirs: lines(values.includes), threads: Number(values.threads), physical,
       simulation: values.tb ? {...editorBase?.simulation, top: values.simtop, testbench: lines(values.tb), pass_marker: values.marker || 'PASS', cell_models: lines(values.models)} : null};
+    const hooks = parseAssignments(values.hooks, 'Tcl hooks'), parameters = parseAssignments(values.parameters, 'Tcl parameters');
+    if (!values.tcldir && (Object.keys(hooks).length || Object.keys(parameters).length)) throw new Error('Choose a Tcl bundle directory for your scripts and parameters.');
+    project.tcl = values.tcldir ? {directory: values.tcldir, hooks, parameters} : null;
+    project.orfs_variables = Object.fromEntries(Object.entries(parseAssignments(values.variables, 'ORFS settings')).map(([key, value]) => [key, value === 'true' ? true : value === 'false' ? false : /^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(value) ? Number(value) : value]));
+    project.orfs_files = Object.fromEntries(Object.entries(parseAssignments(values.files, 'ORFS files')).map(([key, value]) => [key, value.split(',').map(path => path.trim()).filter(Boolean)]));
     const saved = await post('/api/projects', project);
     await loadProjects(); $('#config').value = saved.path; $('#project-dialog').close();
     notify(`${saved.name} saved. Check the project, then start a run.`); await checkProject();
@@ -498,4 +511,125 @@ async function setup() {
     try { const previous = localStorage.getItem('chipflow.config'); if (previous) $('#config').value = previous; else $('#config').value = environment.example; } catch {}
   } catch (error) { $('#tools-content').textContent = error.message; }
 }
-stageHelp(); setup(); refresh(); setInterval(refresh, 1000);
+
+function parseAssignments(text, label) {
+  const result = {};
+  for (const line of lines(text).filter(line => !line.startsWith('#'))) {
+    const at = line.indexOf('=');
+    if (at < 1) throw new Error(`${label}: use one NAME=value assignment per line.`);
+    const name = line.slice(0, at).trim(), value = line.slice(at + 1).trim();
+    if (Object.hasOwn(result, name)) throw new Error(`${label}: ${name} is listed twice.`);
+    result[name] = value;
+  }
+  return result;
+}
+function setExperience() {
+  const expert = $('#experience').value === 'expert';
+  $('#learning').hidden = expert; $('.welcome').hidden = expert;
+  $('#edit-yaml').hidden = !expert;
+  try { localStorage.setItem('chipflow.experience', $('#experience').value); } catch {}
+}
+try { $('#experience').value = localStorage.getItem('chipflow.experience') || 'learn'; } catch {}
+$('#experience').onchange = setExperience;
+setExperience();
+function learningState() {
+  const related = runs.filter(run => run.source_config === guideConfig);
+  const done = new Set(related.flatMap(run => run.stages.filter(stage => stage.status === 'completed').map(stage => stage.name)));
+  const active = related.find(run => !terminal.has(run.status));
+  const next = guideData?.lessons.find(lesson => !done.has(lesson.target));
+  return {done, active, next};
+}
+function renderLearning() {
+  if (!guideData) return;
+  const {done, active, next} = learningState();
+  const key = JSON.stringify([guideConfig, [...done], active?.id, next?.target, guideBusy]);
+  if (key === learningKey) return; learningKey = key;
+  $('#learning-progress').textContent = guideConfig ? `${done.size} of ${guideData.lessons.length} steps completed for ${guideConfig.split('/').slice(-2).join('/')}` : 'Start with a counter that includes a testbench. Simulation only needs Icarus Verilog.';
+  $('#learn-start').disabled = guideBusy || Boolean(active);
+  $('#learn-start').textContent = guideConfig ? 'Start another counter' : 'Start learning with a counter';
+  $('#learn-next').hidden = !guideConfig || !next;
+  $('#learn-next').disabled = guideBusy || Boolean(active);
+  $('#learn-next').textContent = active ? 'Step running…' : next ? `Run step ${guideData.lessons.indexOf(next) + 1}: ${next.title}` : 'Learning path complete';
+  $('#learning-status').textContent = active ? `Running ${stages[active.target][0]}. Watch its logs below.` : guideConfig && !next ? 'All learning steps completed. Review timing and router checks before interpreting the layout.' : '';
+  const list = $('#lessons'); list.replaceChildren();
+  for (const [index, lesson] of guideData.lessons.entries()) {
+    const item = node('li', undefined, 'lesson' + (done.has(lesson.target) ? ' done' : next?.target === lesson.target && guideConfig ? ' current' : ''));
+    item.append(node('small', `${String(index + 1).padStart(2, '0')} · ${done.has(lesson.target) ? 'Completed' : active?.target === lesson.target ? 'Running' : lesson.target}`), node('h3', lesson.title), node('p', lesson.explanation));
+    const details = node('details'); details.append(node('summary', 'What to look for'), node('p', 'Output: ' + lesson.output), node('p', lesson.review), node('small', 'Tools: ' + lesson.tools)); item.append(details); list.append(item);
+  }
+}
+async function learningRun(create) {
+  if (guideBusy) return; guideBusy = true; renderLearning(); message('#error', '');
+  try {
+    if (create) { const starter = await post('/api/projects/starter'); guideConfig = starter.path; await loadProjects(); }
+    if (!guideConfig) throw new Error('Choose a project or start with the counter example.');
+    try { localStorage.setItem('chipflow.guideConfig', guideConfig); } catch {}
+    const next = learningState().next;
+    if (!next) return;
+    $('#config').value = guideConfig; $('#target').value = next.target; stageHelp();
+    const check = await checkProject();
+    if (!check.ready) { notify('Resolve the project checks below. Installed tools lists setup suggestions.'); return; }
+    const run = await post('/api/runs', {config: guideConfig, target: next.target});
+    select(run.id); changeTab('logs'); await refresh();
+    notify(`Learning step started: ${next.title}. Read “What to look for” while the tools run.`);
+    $('#detail').scrollIntoView({block: 'start', behavior: 'smooth'});
+  } catch (error) { showError(error); }
+  finally { guideBusy = false; renderLearning(); }
+}
+$('#learn-start').onclick = () => learningRun(true);
+$('#learn-next').onclick = () => learningRun(false);
+$('#learn-current').onclick = async () => {
+  try {
+    const info = await post('/api/projects/inspect', {config: $('#config').value.trim(), target: 'sim'});
+    guideConfig = info.path; try { localStorage.setItem('chipflow.guideConfig', guideConfig); } catch {}
+    renderLearning(); notify('Learning path now follows the selected project. Each physical target includes its prerequisites.');
+  } catch (error) { showError(error); }
+};
+async function loadGuide() {
+  try {
+    guideData = await api('/api/guide'); const glossary = $('#glossary'); glossary.replaceChildren();
+    for (const [term, meaning] of Object.entries(guideData.glossary)) glossary.append(node('dt', term), node('dd', meaning));
+    renderLearning();
+  } catch (error) { $('#learning-progress').textContent = error.message; }
+}
+function renderReference() {
+  if (!referenceData) return;
+  const query = $('#reference-search').value.toLowerCase(), root = $('#reference-results'); root.replaceChildren();
+  const items = [...Object.entries(referenceData.hooks).map(([name, info]) => ({name, ...info, hook: true})), ...Object.entries(referenceData.variables).filter(([, info]) => !info.managed && !info.script).map(([name, info]) => ({name, ...info, hook: false}))].filter(item => (item.name + ' ' + item.description).toLowerCase().includes(query));
+  root.append(node('p', `${items.length} matching settings. Showing up to 40; search to narrow the list.`, 'muted'));
+  for (const item of items.slice(0, 40)) {
+    const row = node('div', undefined, 'reference-item'); row.append(node('strong', item.name), node('p', item.description));
+    if (item.hook && !item.available) row.append(node('p', 'Not executed by this installed ORFS revision.', 'missing-tool'));
+    else {
+      const add = button(item.hook ? 'Add script entry' : 'Add override', () => {
+        const field = $(item.hook ? '#p-hooks' : '#p-variables');
+        try { if (Object.hasOwn(parseAssignments(field.value, 'Settings'), item.name)) { notify(`${item.name} is already in the form.`); return; } }
+        catch (error) { showError(error, '#project-error'); return; }
+        const value = item.hook ? 'custom.tcl' : item.default == null || /[$#\n]/.test(String(item.default)) ? '' : String(item.default);
+        field.value += (field.value.trim() ? '\n' : '') + item.name + '=' + value; field.focus();
+      }); row.append(add);
+    }
+    root.append(row);
+  }
+}
+$('#reference-load').onclick = async () => {
+  try { referenceData = await api('/api/reference?orfs=' + encodeURIComponent($('#p-orfs').value)); $('#reference').hidden = false; renderReference(); }
+  catch (error) { showError(error, '#project-error'); }
+};
+$('#reference-search').oninput = renderReference;
+$('#edit-yaml').onclick = async () => {
+  try {
+    const data = await api('/api/projects/yaml?config=' + encodeURIComponent($('#config').value.trim()));
+    $('#yaml-editor').value = data.yaml; message('#yaml-error', ''); openDialog('yaml-dialog'); $('#yaml-editor').focus();
+  } catch (error) { showError(error); }
+};
+$('#yaml-form').onsubmit = async event => {
+  event.preventDefault(); const save = $('#yaml-save'); save.disabled = true; message('#yaml-error', '');
+  try {
+    const data = await post('/api/projects/yaml', {yaml: $('#yaml-editor').value});
+    await loadProjects(); $('#config').value = data.path; $('#yaml-dialog').close();
+    notify('Saved a new project copy with the complete configuration.'); await checkProject();
+  } catch (error) { showError(error, $('#yaml-dialog').open ? '#yaml-error' : '#error'); }
+  finally { save.disabled = false; }
+};
+stageHelp(); setup(); loadGuide(); refresh(); setInterval(refresh, 1000);
