@@ -52,8 +52,8 @@ check on a [GitHub Linux runner](https://github.com/shreenxdhi/homebrew-chipflow
 
 ## 1.0.0 stable acceptance
 
-The expanded [release CI](https://github.com/shreenxdhi/chipflow/actions/runs/38928101321)
-passed all 65 tests on Python 3.11–3.14 across Ubuntu 22.04 and 24.04, distribution
+The expanded [release CI](https://github.com/shreenxdhi/chipflow/actions/workflows/ci.yml)
+passed all 66 tests on Python 3.11–3.14 across Ubuntu 22.04 and 24.04, distribution
 validation, installed-wheel simulation/server checks, browser interaction, and a
 clean Debian 12 container installation. The browser test covers fresh-workspace
 setup, missing physical tools, real simulation, waveform downloads, comparisons,
@@ -72,5 +72,5 @@ All 25 existing version-0.1 history entries were backed up and restored into a
 separate directory. Automated restoration also retries a real simulation after
 removing the original run directory. Fault tests cover worker SIGKILL, inherited
 physical locks, signal/cancel cleanup, PID reuse, atomic-write failures, corrupted
-saved inputs/configuration, archive corruption/traversal/links, future schemas,
+saved inputs/configuration, archive corruption/truncation/traversal/links, future schemas,
 UTF-8 log boundaries, and missing physical outputs.

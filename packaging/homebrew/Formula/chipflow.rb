@@ -3,8 +3,8 @@ class Chipflow < Formula
 
   desc "Local RTL-to-GDS workflow manager with terminal and browser dashboards"
   homepage "https://github.com/shreenxdhi/chipflow"
-  url "https://github.com/shreenxdhi/chipflow/releases/download/v0.1.0/chipflow-0.1.0.tar.gz"
-  sha256 "e545a2622e9e11b85b0e03afc23da6e87b8716fc19142a0644b2f1ca9c78e95e"
+  url "https://github.com/shreenxdhi/chipflow/releases/download/v1.0.0/chipflow-1.0.0.tar.gz"
+  sha256 "99cc9fe679e791e7e599c45d89d2736da17684a1ae6c38178079f06771c795dc"
   license "Apache-2.0"
 
   depends_on :linux
@@ -91,10 +91,22 @@ class Chipflow < Formula
     virtualenv_install_with_resources
   end
 
+  def caveats
+    <<~EOS
+      Check EDA prerequisites and installation suggestions:
+        chipflow setup
+      Create your first project:
+        chipflow init counter-demo
+      EDA tools and licensed platform data are installed separately.
+    EOS
+  end
+
   test do
     assert_match version.to_s, shell_output("#{bin}/chipflow --version")
     system bin/"chipflow", "init", testpath/"demo"
     assert_path_exists testpath/"demo/counter.v"
     assert_match "rtl:", (testpath/"demo/chipflow.yaml").read
+    system bin/"chipflow", "--runs", testpath/"runs", "backup", testpath/"history.tar.gz"
+    system bin/"chipflow", "--runs", testpath/"restored", "restore", testpath/"history.tar.gz"
   end
 end

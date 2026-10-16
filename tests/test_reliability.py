@@ -373,6 +373,16 @@ def test_invalid_backup_has_an_actionable_error(tmp_path):
         restore(Store(tmp_path / "runs"), path)
 
 
+def test_truncated_backup_has_an_actionable_error(completed, tmp_path):
+    store, state = completed
+    path = tmp_path / "backup.tar.gz"
+    backup(store, path)
+    data = path.read_bytes()
+    path.write_bytes(data[: len(data) // 2])
+    with pytest.raises(ValueError, match="Invalid backup archive"):
+        restore(Store(tmp_path / "restored"), path)
+
+
 def test_health_reports_unavailable_history(tmp_path):
     store_path = tmp_path / "runs"
     client = TestClient(create_app(store_path), base_url="http://127.0.0.1")

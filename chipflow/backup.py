@@ -69,7 +69,7 @@ def backup(store, destination: Path):
 def restore(store, source: Path):
     try:
         return _restore(store, source)
-    except (tarfile.TarError, KeyError, TypeError) as exc:
+    except (tarfile.TarError, EOFError, KeyError, TypeError) as exc:
         raise ValueError(f"Invalid backup archive: {exc}") from exc
 
 
