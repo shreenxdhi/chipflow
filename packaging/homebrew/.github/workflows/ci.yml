@@ -16,7 +16,10 @@ jobs:
       - name: Load the reviewed formula
         run: |
           brew tap shreenxdhi/chipflow
-          cp Formula/chipflow.rb "$(brew --repository)/Library/Taps/shreenxdhi/homebrew-chipflow/Formula/chipflow.rb"
+          target="$(brew --repository)/Library/Taps/shreenxdhi/homebrew-chipflow/Formula/chipflow.rb"
+          if [ "$(realpath Formula/chipflow.rb)" != "$(realpath "$target")" ]; then
+            cp Formula/chipflow.rb "$target"
+          fi
           brew trust --formula shreenxdhi/chipflow/chipflow
       - run: brew install --build-from-source shreenxdhi/chipflow/chipflow
       - run: brew test shreenxdhi/chipflow/chipflow
