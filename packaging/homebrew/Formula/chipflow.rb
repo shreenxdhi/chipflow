@@ -4,7 +4,7 @@ class Chipflow < Formula
   desc "Local RTL-to-GDS workflow manager with terminal and browser dashboards"
   homepage "https://github.com/shreenxdhi/chipflow"
   url "https://github.com/shreenxdhi/chipflow/releases/download/v1.1.1/chipflow-1.1.1.tar.gz"
-  sha256 "abb1b9db9a02bc4f1de69434eb9595e770a6ea5e9b83c2c945fe93e029e03e9d"
+  sha256 "75a1d1c019a9fed5f0dee594b81b8c04318618871c403c2d7978da05a4b8bd7d"
   license "Apache-2.0"
 
   depends_on :linux

@@ -89,6 +89,8 @@ Tcl/helper resources, expert initialization, quickstart simulation, and server.
 A real expert Nangate45 counter flow completed through GDSII. Its native
 POST_FLOORPLAN_TCL and POST_CTS_TCL scripts executed, including a shared helper and
 the configured LABEL parameter. Timing and router checks passed; overall physical
-signoff remains unknown. The validated native toolchain and Sky130 DMA acceptance
-are described above. Release CI repeats the manager tests across supported hosts
+signoff remains unknown. A fresh Sky130 DMA run also completed with the timing
+and router results in the table unchanged. KLayout opened the expert counter and
+DMA layouts and confirmed the expected top cells (33 and 129 cells respectively).
+The native toolchain is described above. Release CI repeats the manager tests across supported hosts
 and Python versions; the public tap validates the installed formula separately.
