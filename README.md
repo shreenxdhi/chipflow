@@ -7,22 +7,25 @@ or external API during normal operation.
 
 ## Install
 
-Python 3.11 or newer is required. Until a public release is published, install from
-the repository:
+On Linux with Homebrew:
 
 ```sh
-pipx install git+https://github.com/shreenxdhi/chipflow.git
+brew install shreenxdhi/chipflow/chipflow
+chipflow setup
 ```
 
-The release package is named `chipflow`; once published to PyPI:
+The [0.1.0 beta release](https://github.com/shreenxdhi/chipflow/releases/tag/v0.1.0)
+and [Homebrew tap](https://github.com/shreenxdhi/homebrew-chipflow) are available.
+The first Homebrew installation builds dependencies from source and may take
+several minutes. Python users with Python 3.11 or newer can install the tagged source:
 
 ```sh
-pipx install chipflow
+pipx install 'git+https://github.com/shreenxdhi/chipflow.git@v0.1.0'
 ```
 
-A versioned Homebrew tap is maintained separately. See [release instructions](docs/RELEASING.md)
-for its availability and validation requirements. Installing the manager does not
-install or modify EDA tools or platform data.
+PyPI publication is pending maintainer account configuration; `pipx install chipflow`
+is not yet an available installation route. See [release instructions](docs/RELEASING.md).
+Installing the manager does not install or modify EDA tools or platform data.
 
 ## Check and configure prerequisites
 

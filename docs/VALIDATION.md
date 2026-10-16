@@ -46,3 +46,6 @@ A Homebrew source installation and functional `brew test` passed in the official
 Linuxbrew container, including compiled native Python dependencies. The tested
 archive matches the published GitHub release SHA-256. Source builds may take
 several minutes; a prebuilt Homebrew bottle is not included in this release.
+
+The public tap also passed a fresh source installation, `brew test`, and version
+check on a [GitHub Linux runner](https://github.com/shreenxdhi/homebrew-chipflow/actions/runs/38921259283).
