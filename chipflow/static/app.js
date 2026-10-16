@@ -492,6 +492,7 @@ async function loadProjects() {
   for (const project of projects) { const option = node('option'); option.value = project.path; option.label = `${project.name}${project.example ? ' · example' : ''} · ${project.platform}`; $('#project-list').append(option); }
 }
 async function setup() {
+  const initialConfig = $('#config').value;
   try {
     environment = await api('/api/workspace'); $('#workspace-path').textContent = environment.directory;
     $('#platform-list').replaceChildren(); for (const platform of environment.platforms) { const option = node('option'); option.value = platform; $('#platform-list').append(option); }
@@ -508,7 +509,9 @@ async function setup() {
     content.append(node('p', 'Run chipflow setup in a terminal for prerequisite checks and installation suggestions.', 'muted'));
     content.append(node('p', `Workspace: ${environment.directory}`, 'muted'));
     await loadProjects();
-    try { const previous = localStorage.getItem('chipflow.config'); if (previous) $('#config').value = previous; else $('#config').value = environment.example; } catch {}
+    if ($('#config').value === initialConfig) {
+      try { const previous = localStorage.getItem('chipflow.config'); $('#config').value = previous || environment.example; } catch {}
+    }
   } catch (error) { $('#tools-content').textContent = error.message; }
 }
 
@@ -533,8 +536,19 @@ try { $('#experience').value = localStorage.getItem('chipflow.experience') || 'l
 $('#experience').onchange = setExperience;
 setExperience();
 function learningState() {
-  const related = runs.filter(run => run.source_config === guideConfig);
-  const done = new Set(related.flatMap(run => run.stages.filter(stage => stage.status === 'completed').map(stage => stage.name)));
+  const byId = new Map(runs.map(run => [run.id, run]));
+  const related = runs.filter(run => {
+    const seen = new Set();
+    while (run && !seen.has(run.id)) {
+      if (run.source_config === guideConfig) return true;
+      seen.add(run.id);
+      const parts = run.source_config?.split('/') || [];
+      run = parts.at(-1) === 'project.json' ? byId.get(parts.at(-2)) : null;
+    }
+    return false;
+  });
+  const targets = new Set(guideData?.lessons.map(lesson => lesson.target) || []);
+  const done = new Set(related.flatMap(run => run.stages.filter(stage => stage.status === 'completed' && targets.has(stage.name)).map(stage => stage.name)));
   const active = related.find(run => !terminal.has(run.status));
   const next = guideData?.lessons.find(lesson => !done.has(lesson.target));
   return {done, active, next};

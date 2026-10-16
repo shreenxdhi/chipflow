@@ -14,13 +14,13 @@ brew install shreenxdhi/chipflow/chipflow
 chipflow setup
 ```
 
-The [1.1.0 release](https://github.com/shreenxdhi/chipflow/releases/tag/v1.1.0)
+The [1.1.1 release](https://github.com/shreenxdhi/chipflow/releases/tag/v1.1.1)
 and [Homebrew tap](https://github.com/shreenxdhi/homebrew-chipflow) are available.
 The first Homebrew installation builds dependencies from source and may take
 several minutes. Python users with Python 3.11 or newer can install the tagged source:
 
 ```sh
-pipx install 'git+https://github.com/shreenxdhi/chipflow.git@v1.1.0'
+pipx install 'git+https://github.com/shreenxdhi/chipflow.git@v1.1.1'
 ```
 
 PyPI publication is pending maintainer account configuration; `pipx install chipflow`

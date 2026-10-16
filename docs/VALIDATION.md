@@ -75,13 +75,13 @@ physical locks, signal/cancel cleanup, PID reuse, atomic-write failures, corrupt
 saved inputs/configuration, archive corruption/truncation/traversal/links, future schemas,
 UTF-8 log boundaries, and missing physical outputs.
 
-## 1.1.0 learning and customization acceptance
+## 1.1 learning and customization acceptance
 
 The local suite passed 84 tests, including Tcl bundle preservation through retry
 and backup/restore, scoped script parameters, installed-variable/hook discovery,
 unsafe/protected overrides, full YAML copies, and noncanonical flow-directory paths.
 The expanded browser smoke passed a real beginner simulation, persisted learning
-progress and workspace mode, malformed YAML errors, complete YAML saves, guided
+progress (including gate simulations and retry ancestry) and workspace mode, malformed YAML errors, complete YAML saves, guided
 copy preservation, and the existing run/log/download/cancellation/mobile checks.
 The installed wheel passed from outside the checkout, including its learning guide,
 Tcl/helper resources, expert initialization, quickstart simulation, and server.
