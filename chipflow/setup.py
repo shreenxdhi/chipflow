@@ -1,4 +1,4 @@
-"""Read-only prerequisite assessment with platform-specific next steps."""
+"""Read-only prerequisite assessment with platform-specific installation choices."""
 
 from __future__ import annotations
 
@@ -163,11 +163,12 @@ def assess(
             }
         )
     ready = all(c["status"] == "available" for c in checks)
-    return {
+    report = {
         "ready": ready,
         "target": target,
         "platform": platform,
         "host": host,
+        "bin_dirs": bin_dirs or [],
         "orfs": str(flow),
         "platforms": available_platforms,
         "tools": tools,
@@ -175,6 +176,10 @@ def assess(
         "settings_file": str(settings_path()),
         "verification": "Availability checks do not prove version compatibility. Run chipflow verify --target sim, then chipflow verify --target finish to exercise the installed tools.",
     }
+    from .installer import installation_options
+
+    report["installation_options"] = installation_options(report)
+    return report
 
 
 def format_report(report: dict) -> str:
@@ -197,4 +202,12 @@ def format_report(report: dict) -> str:
         else "Resolve the items marked FIX, then run chipflow setup again.",
         report["verification"],
     ]
+    if not report["ready"]:
+        lines.append(
+            "Choose and install missing tools: chipflow setup --install --target "
+            + report["target"]
+            + " --platform "
+            + report["platform"]
+            + ". List variants without installing: chipflow setup --options."
+        )
     return "\n".join(lines)

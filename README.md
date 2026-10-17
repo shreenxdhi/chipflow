@@ -38,21 +38,26 @@ chipflow setup
 
 Version [1.1.1 is published on PyPI](https://pypi.org/project/chipflow/1.1.1/).
 See [release instructions](docs/RELEASING.md).
-Installing the manager does not install or modify EDA tools or platform data.
+After installing the manager, run `chipflow setup --install` to choose EDA tools
+and installation variants. Each plan needs your approval before installation.
+See the [tool installation guide](docs/INSTALLATION.md), including a prebuilt
+Icarus/Yosys option that needs no administrator access.
 
 ## Check and configure prerequisites
 
 ```sh
 chipflow setup
-chipflow setup --target sim
+chipflow setup --target sim --install
 chipflow setup --orfs /opt/OpenROAD-flow-scripts --bin-dir /opt/eda/bin --save
 chipflow setup --json
 ```
 
 Setup checks tool availability, the ORFS flow, and selected platform views. Missing
 items include installation suggestions and links to upstream documentation. ORFS,
-Yosys, and OpenROAD should come from a compatible toolchain revision. Suggestions
-are displayed for review; the manager does not run package managers or `sudo`.
+Yosys, and OpenROAD should come from a compatible toolchain revision. Interactive
+setup offers installation choices and runs only the plan you approve.
+Use `chipflow setup --check` for a read-only report or `--options` to list variants.
+The browser lists the same choices and provides commands to run in a terminal.
 
 `ORFS_HOME` overrides saved settings. Otherwise Chipflow discovers common ORFS
 locations. Saved settings live in `$XDG_CONFIG_HOME/chipflow/settings.json`, or
@@ -209,9 +214,10 @@ controller. Other platforms and designs require their own verification. The
 clock-only counter constraints do not establish I/O timing coverage.
 
 The 1.x release supports single-user Linux operation with trusted inputs and
-toolchains. Paths used by ORFS must avoid spaces and Make/shell metacharacters. Automatic
-EDA installation, automatic PDK integration, remote workers, and a container execution
-backend are not included. A container is used to test clean manager installation.
+toolchains. Paths used by ORFS must avoid spaces and Make/shell metacharacters.
+Tool installation requires an explicit choice and approval. Automatic PDK
+integration, remote workers, and a container execution backend are not included.
+A container is used to test clean manager installation.
 See [operations](docs/OPERATIONS.md) for the supported host/toolchain matrix,
 upgrades, backups, crash recovery, monitoring, and maintenance.
 

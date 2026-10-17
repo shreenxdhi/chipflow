@@ -210,7 +210,7 @@ function overview(run, files) {
   }
   return panel;
 }
-function changeTab(value) { tab = value; updateLocation(); lastState = ''; const run = runs.find(r => r.id === selected); if (run) { renderDetail(run); renderTab(run).catch(error => showError(error)); } refresh(); }
+function changeTab(value) { tab = value; updateLocation(); lastState = ''; const run = runs.find(r => r.id === selected); if (run) { renderDetail(run); lastState = JSON.stringify(run) + tab; renderTab(run).catch(error => showError(error)); } refresh(); }
 function renderDetail(run) {
   const focused = $('#detail').contains(document.activeElement) ? document.activeElement.id : null;
   const root = $('#detail'); root.replaceChildren();
@@ -491,7 +491,7 @@ async function loadProjects() {
   projects = await api('/api/projects'); $('#project-list').replaceChildren();
   for (const project of projects) { const option = node('option'); option.value = project.path; option.label = `${project.name}${project.example ? ' · example' : ''} · ${project.platform}`; $('#project-list').append(option); }
 }
-async function setup() {
+async function setup(preserveConfig = false) {
   const initialConfig = $('#config').value;
   try {
     environment = await api('/api/workspace'); $('#workspace-path').textContent = environment.directory;
@@ -505,15 +505,39 @@ async function setup() {
         const issue = node('div', undefined, 'help-note');
         issue.append(node('strong', check.name), node('p', check.detail), node('p', check.action)); content.append(issue);
       }
+      content.append(node('h3', 'Choose tools to install', 'subheading'));
+      content.append(node('p', 'Choose a package or build variant below. Copy its command and run it in a terminal on this machine; Chipflow will show the installation commands and ask before running them.'));
+      const select = node('select'); select.id = 'install-option'; select.setAttribute('aria-label', 'Tool installation variant');
+      for (const item of setup.installation_options || []) {
+        const option = node('option', item.label + (item.available ? '' : ' (guide only / unavailable)'));
+        option.value = item.id; select.append(option);
+      }
+      const description = node('p'); description.id = 'install-description';
+      const command = node('code'); command.id = 'install-command';
+      const source = node('a', 'Installation guide'); source.target = '_blank'; source.rel = 'noopener noreferrer';
+      const copy = button('Copy installation command', async () => { await copyText(command.textContent); });
+      const update = () => {
+        const item = (setup.installation_options || []).find(item => item.id === select.value);
+        if (!item) return;
+        description.textContent = item.description + (item.available ? '' : ' ' + item.reason);
+        command.textContent = item.command; command.hidden = !item.available; copy.hidden = !item.available;
+        source.href = item.source;
+      };
+      select.onchange = update; update();
+      const choice = node('section', undefined, 'installation-choice');
+      choice.append(select, description, command, copy, source); content.append(choice);
     }
-    content.append(node('p', 'Run chipflow setup in a terminal for prerequisite checks and installation suggestions.', 'muted'));
+    content.append(node('p', 'Run chipflow setup --install in a terminal to choose and install missing tools. Package installation itself does not verify flow compatibility.', 'muted'));
+    content.append(button('Recheck installed tools', setupTools));
     content.append(node('p', `Workspace: ${environment.directory}`, 'muted'));
     await loadProjects();
-    if ($('#config').value === initialConfig) {
+    if (!preserveConfig && $('#config').value === initialConfig) {
       try { const previous = localStorage.getItem('chipflow.config'); $('#config').value = previous || environment.example; } catch {}
     }
   } catch (error) { $('#tools-content').textContent = error.message; }
 }
+
+async function setupTools() { await setup(true); }
 
 function parseAssignments(text, label) {
   const result = {};

@@ -87,7 +87,7 @@ def parser():
     item.add_argument("--orfs")
     item.add_argument("--search", default="")
     item.add_argument("--json", action="store_true")
-    item = commands.add_parser("setup", help="check prerequisites and suggest installation steps")
+    item = commands.add_parser("setup", help="check prerequisites and choose tool installers")
     item.add_argument("--orfs", help="ORFS repository or flow directory")
     item.add_argument(
         "--bin-dir", action="append", default=None, help="additional tool directory (repeatable)"
@@ -98,6 +98,25 @@ def parser():
     item.add_argument("--target", choices=STAGES, default="finish")
     item.add_argument("--platform", default="nangate45")
     item.add_argument("--json", action="store_true", help="machine-readable assessment")
+    item.add_argument("--check", action="store_true", help="check only; never prompt")
+    item.add_argument(
+        "--options", action="store_true", help="list installation variants without installing"
+    )
+    item.add_argument(
+        "--install", action="store_true", help="choose tools and approve installation commands"
+    )
+    item.add_argument("--option", help="preselect an installation option from --options")
+    item.add_argument(
+        "--install-dir",
+        type=Path,
+        help="dedicated directory for an ORFS checkout or prebuilt suite",
+    )
+    item.add_argument("--package", type=Path, help="local upstream .deb/.rpm package to install")
+    item.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print a selected installation plan without running it",
+    )
     item = commands.add_parser("init", help="create a runnable counter example in a new directory")
     item.add_argument("directory", type=Path)
     item.add_argument("--orfs")
@@ -186,6 +205,18 @@ def main(argv=None):
                     print("No matching settings. Check --orfs and the search term.")
             return 0
         if args.command == "setup":
+            from .installer import ask, interactive_setup
+
+            if (
+                args.option or args.dry_run or args.install_dir or args.package
+            ) and not args.install:
+                raise ValueError(
+                    "Use --install with --option, --dry-run, --install-dir or --package."
+                )
+            if args.install and (args.json or args.check or args.options):
+                raise ValueError("Use --install separately from --json, --check and --options.")
+            if args.save and args.dry_run:
+                raise ValueError("--dry-run cannot be combined with --save.")
             saved = None
             if args.save:
                 saved = str(write_settings(args.orfs, args.bin_dir))
@@ -194,6 +225,33 @@ def main(argv=None):
             if saved:
                 result["saved_settings"] = saved
             print(json.dumps(result, indent=2) if args.json else format_report(result))
+            if args.options and not args.json:
+                for option in result["installation_options"]:
+                    print("\n" + option["id"] + ": " + option["label"])
+                    print(option["description"])
+                    print(option["command"] if option["available"] else option["reason"])
+                    print("Source: " + option["source"])
+            interactive = sys.stdin.isatty() and sys.stdout.isatty()
+            install = args.install
+            if (
+                not result["ready"]
+                and interactive
+                and not (args.json or args.check or args.options or install)
+            ):
+                install = ask("Review installation choices for missing tools? [y/N]: ").lower() in {
+                    "y",
+                    "yes",
+                }
+            if install:
+                result = interactive_setup(
+                    result,
+                    option_id=args.option,
+                    directory=args.install_dir,
+                    package=args.package,
+                    dry_run=args.dry_run,
+                )
+                if args.dry_run:
+                    return 0
             return 0 if result["ready"] else 1
         activate_environment()
         if args.command == "wizard":
@@ -209,6 +267,16 @@ def main(argv=None):
             print(json.dumps(doctor(args.orfs), indent=2))
             return 0
         if args.command in {None, "dashboard", "tui"}:
+            if args.command is None and sys.stdin.isatty() and sys.stdout.isatty():
+                report = assess(versions=False)
+                if not report["ready"]:
+                    from .installer import ask, interactive_setup
+
+                    print(format_report(report))
+                    if ask(
+                        "Review installation choices before opening the dashboard? [y/N]: "
+                    ).lower() in {"y", "yes"}:
+                        interactive_setup(report)
             from .tui import launch
 
             return launch(
@@ -230,7 +298,17 @@ def main(argv=None):
                 report = assess(target=target, versions=False)
                 if not report["ready"]:
                     print(format_report(report))
-                    return 1
+                    from .installer import ask, interactive_setup
+
+                    if (
+                        sys.stdin.isatty()
+                        and sys.stdout.isatty()
+                        and ask("Review installation choices for missing tools? [y/N]: ").lower()
+                        in {"y", "yes"}
+                    ):
+                        report = interactive_setup(report)
+                    if not report["ready"]:
+                        return 1
             config = init_project(args.directory)
             print(
                 f"Created {config.parent}\ncounter.v is the hardware; tb.v checks its behavior. Read GUIDE.md while learning."
@@ -279,6 +357,12 @@ def main(argv=None):
             result = store.compare(args.left, args.right)
         print(json.dumps(result, indent=2))
         return 0
+    except KeyboardInterrupt:
+        print(
+            "\nStopped. Completed installation steps are kept; rerun chipflow setup to recheck.",
+            file=sys.stderr,
+        )
+        return 130
     except (ValueError, OSError) as exc:
         print(f"chipflow: {exc}", file=sys.stderr)
         return 1

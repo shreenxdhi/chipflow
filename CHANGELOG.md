@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Interactive setup offers missing-tool installation choices, approved command
+  plans, native packages, prebuilt OSS CAD Suite without sudo, pinned ORFS source
+  builds, local upstream packages, and reuse of existing toolchains.
+- First launch and quickstart offer setup when tools are missing; the browser
+  lists variants and copies their terminal installation commands.
+- Read-only checks, JSON reports, and dry-run plans remain available for scripts.
+- Tab changes avoid an immediate duplicate render that could replace a file-search
+  input while it was being edited.
+
 ## 1.1.1
 
 - Learning progress counts only the seven lesson stages and follows runs retried

@@ -48,7 +48,19 @@ with sync_playwright() as p:
     expect(page.locator("#help-dialog")).not_to_be_visible()
     page.get_by_role("button", name="Installed tools", exact=True).click()
     expect(page.locator("#tools-content")).to_contain_text("iverilog")
+    expect(page.locator("#install-option")).to_be_visible()
+    page.locator("#install-option").select_option("orfs-checkout")
+    expect(page.locator("#install-command")).to_contain_text("--install --option orfs-checkout")
+    expect(page.locator("#install-description")).to_contain_text("pinned flow")
+    previous_config = page.locator("#config").input_value()
     page.keyboard.press("Escape")
+    page.locator("#config").fill("my-custom-project.yaml")
+    page.get_by_role("button", name="Installed tools", exact=True).click()
+    with page.expect_response(lambda response: response.url.endswith("/api/projects")):
+        page.get_by_role("button", name="Recheck installed tools").click()
+    expect(page.locator("#config")).to_have_value("my-custom-project.yaml")
+    page.keyboard.press("Escape")
+    page.locator("#config").fill(previous_config)
 
     # A first-time learner creates a counter and executes real Icarus simulation.
     expect(page.locator("#lessons .lesson")).to_have_count(7)
@@ -178,7 +190,15 @@ with sync_playwright() as p:
     expect(page.locator("#log-count")).to_contain_text("Showing recent output", timeout=30000)
     assert len(page.locator("#log-output").inner_text()) <= 2 * 1024 * 1024
     assert (run_folder / "console.log").stat().st_size > 2 * 1024 * 1024
+    # Hold polling so the tab can render before its next unchanged refresh.
+    page.wait_for_function("() => { if (busy) return false; busy = true; return true; }")
     page.get_by_role("tab", name="Files", exact=True).click()
+    expect(page.locator("#file-search")).to_be_visible()
+    page.evaluate("window.fileSearchBeforeRefresh = document.querySelector('#file-search')")
+    page.evaluate("busy = false; refresh()")
+    assert page.evaluate(
+        "window.fileSearchBeforeRefresh === document.querySelector('#file-search')"
+    )
     page.get_by_role("searchbox", name="Search output files").fill(".vcd")
     expect(page.locator(".artifacts")).to_contain_text("Waveform")
     expect(page.locator(".artifacts")).not_to_contain_text("project.json")

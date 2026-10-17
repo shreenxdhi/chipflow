@@ -331,6 +331,8 @@ def test_default_command_in_monochrome_terminal(terminal_store):
         environment={"TERM": "vt100"},
     )
     try:
+        terminal.expect("Review installation choices before opening the dashboard?")
+        terminal.send("\n")
         terminal.expect("RUN HISTORY")
         terminal.send("2")
         terminal.expect("PASS fixture 0")
