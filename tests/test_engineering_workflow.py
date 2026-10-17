@@ -72,3 +72,19 @@ def test_guided_sdc_cli_preserves_existing_constraints(tmp_path, capsys):
     original = output.read_bytes()
     assert main(["sdc", str(spec), "--output", str(output)]) == 1
     assert output.read_bytes() == original
+
+
+@pytest.mark.parametrize("mode, expected", [("success", 0), ("failure", 3), ("timeout", 124)])
+def test_standalone_analysis_guardian_honors_exit_and_timeout(tmp_path, mode, expected):
+    import sys
+
+    from chipflow.runner import execute_native_plan
+    from chipflow.verification import CommandPlan
+
+    program = {
+        "success": "print('native analysis process completed')",
+        "failure": "raise SystemExit(3)",
+        "timeout": "import time; time.sleep(30)",
+    }[mode]
+    plan = CommandPlan("process-test", ((sys.executable, "-c", program),), tmp_path, (), 1)
+    assert execute_native_plan(plan, tmp_path / "console.log") == expected

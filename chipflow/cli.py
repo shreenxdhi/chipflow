@@ -185,6 +185,12 @@ def parser():
         "constraints", help="inventory project SDC; static review is not endpoint coverage"
     )
     item.add_argument("config", type=Path)
+    item = commands.add_parser(
+        "sta", help="run explicit native timing analysis into a new evidence directory"
+    )
+    item.add_argument("spec", type=Path)
+    item.add_argument("--output", type=Path, required=True)
+    item.add_argument("--executable", default="openroad")
     item = commands.add_parser("sdc", help="write guided SDC from explicit JSON timing assumptions")
     item.add_argument("spec", type=Path)
     item.add_argument("--output", type=Path, required=True)
@@ -235,6 +241,32 @@ def main(argv=None):
 
             print(json.dumps(discover_sources(args.directory), indent=2))
             return 0
+        if args.command == "sta":
+            from .runner import execute_native_plan
+            from .storage import save
+            from .timing import sta_plan, sta_result
+
+            if args.spec.stat().st_size > 1024 * 1024:
+                raise ValueError("Timing specification exceeds 1 MiB")
+            args.output.mkdir(parents=True, exist_ok=False)
+            plan = sta_plan(
+                json.loads(args.spec.read_text()),
+                args.output.resolve(),
+                base=args.spec.resolve().parent,
+                executable=args.executable,
+            )
+            code = execute_native_plan(plan, args.output / "console.log")
+            result = sta_result(args.output.resolve(), code)
+            save(args.output / "timing-result.json", result)
+            print(json.dumps(result, indent=2))
+            if code:
+                return 1
+            return (
+                0
+                if result.get("timing_status") == "passed"
+                and result.get("constraint_status") == "passed"
+                else 2
+            )
         if args.command == "sdc":
             from .constraints import write_guided_sdc
 

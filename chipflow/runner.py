@@ -69,6 +69,54 @@ def supervise(argv, parent_fd, timeout, container_runtime=None, container_name=N
         os.close(parent_fd)
 
 
+def execute_native_plan(plan, log_path):
+    """Execute an explicit standalone analysis plan with the native guardian.
+
+    This does not create a managed run. The caller preserves plan inputs/results.
+    Parent-pipe supervision still terminates tools if the caller disappears.
+    """
+    with open(log_path, "ab", buffering=0) as log:
+        for argv in plan.commands:
+            read_fd, write_fd = os.pipe()
+            process = None
+            try:
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-m",
+                        "chipflow.runner",
+                        "--parent-fd",
+                        str(read_fd),
+                        "--timeout",
+                        str(plan.timeout_seconds),
+                        "--",
+                        *argv,
+                    ],
+                    cwd=plan.cwd,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    pass_fds=(read_fd,),
+                )
+            finally:
+                os.close(read_fd)
+                if process is None:
+                    os.close(write_fd)
+            try:
+                code = process.wait()
+            finally:
+                os.close(write_fd)
+                if process.poll() is None:
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait()
+            if code:
+                return code
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--parent-fd", type=int, required=True)
