@@ -328,7 +328,9 @@ def test_default_command_in_monochrome_terminal(terminal_store):
         [sys.executable, "-m", "chipflow", "--runs", str(terminal_store.root)],
         rows=24,
         columns=80,
-        environment={"TERM": "vt100"},
+        # This case exercises first-launch missing prerequisites, independently
+        # of a developer host that already has a complete native toolchain.
+        environment={"TERM": "vt100", "ORFS_HOME": str(terminal_store.root / "missing-orfs")},
     )
     try:
         terminal.expect("Review installation choices before opening the dashboard?")
