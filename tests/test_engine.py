@@ -37,6 +37,10 @@ def project(tmp_path):
 def prepare(monkeypatch, tmp_path):
     # Unit tests run workers in process; the real detached CLI is tested separately.
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: None)
+    # These are application-state tests; native provenance is exercised separately.
+    monkeypatch.setattr(
+        "chipflow.provenance.capture", lambda *a, **k: {"evidence": "application-test-double"}
+    )
 
     def create(path, target="sim"):
         store = Store(tmp_path / "runs")

@@ -36,7 +36,9 @@ def _apply(config, key, value):
     match = re.fullmatch(r"clock\.([A-Za-z_][A-Za-z0-9_]*)\.period_ns", key)
     if match:
         if result.get("sdc"):
-            raise ValueError("clock sweeps require generated constraints; custom SDC is never rewritten")
+            raise ValueError(
+                "clock sweeps require generated constraints; custom SDC is never rewritten"
+            )
         clocks = [clock for clock in result["clocks"] if clock["port"] == match[1]]
         if len(clocks) != 1 or value <= 0:
             raise ValueError("clock sweep must name one configured clock with positive period")
@@ -56,16 +58,25 @@ def _apply(config, key, value):
 
 
 def _validate_objectives(objectives, constraints, required_checks):
-    if not isinstance(objectives, dict) or not objectives or any(
-        not isinstance(key, str) or not key or direction not in {"min", "max"}
-        for key, direction in objectives.items()
+    if (
+        not isinstance(objectives, dict)
+        or not objectives
+        or any(
+            not isinstance(key, str) or not key or direction not in {"min", "max"}
+            for key, direction in objectives.items()
+        )
     ):
         raise ValueError("objectives must map metric names to min/max")
     if not isinstance(constraints, dict):
         raise ValueError("constraints must map metric names to min/max bounds")
     for key, bounds in constraints.items():
-        if (not isinstance(key, str) or not isinstance(bounds, dict) or not bounds
-                or set(bounds) - {"min", "max"} or not all(_finite(v) for v in bounds.values())):
+        if (
+            not isinstance(key, str)
+            or not isinstance(bounds, dict)
+            or not bounds
+            or set(bounds) - {"min", "max"}
+            or not all(_finite(v) for v in bounds.values())
+        ):
             raise ValueError("constraint bounds must contain finite min/max values")
         if bounds.get("min", -math.inf) > bounds.get("max", math.inf):
             raise ValueError("constraint min must not exceed max")
@@ -106,46 +117,73 @@ class ExperimentStore:
         if path.is_symlink() or path.stat().st_size > 4 * 1024 * 1024:
             raise ValueError("unsafe or oversized experiment metadata")
         result = json.loads(path.read_text())
-        if not isinstance(result, dict) or result.get("id") != experiment_id or result.get("schema") != 1:
+        if (
+            not isinstance(result, dict)
+            or result.get("id") != experiment_id
+            or result.get("schema") != 1
+        ):
             raise ValueError("invalid experiment metadata")
         from .engine import STAGES
 
-        if (not _finite(result.get("created"))
-                or result.get("status") not in {"draft", "running", "completed", "stopped", "failed"}
-                or result.get("target") not in STAGES
-                or not isinstance(result.get("verify_first"), bool)
-                or not isinstance(result.get("name"), str)
-                or not isinstance(result.get("parameters"), dict)):
+        if (
+            not _finite(result.get("created"))
+            or result.get("status") not in {"draft", "running", "completed", "stopped", "failed"}
+            or result.get("target") not in STAGES
+            or not isinstance(result.get("verify_first"), bool)
+            or not isinstance(result.get("name"), str)
+            or not isinstance(result.get("parameters"), dict)
+        ):
             raise ValueError("invalid experiment state metadata")
         candidates = result.get("candidates")
         files = result.get("frozen_files")
-        if (not isinstance(candidates, list) or not 1 <= len(candidates) <= MAX_CANDIDATES
-                or not isinstance(files, dict)):
+        if (
+            not isinstance(candidates, list)
+            or not 1 <= len(candidates) <= MAX_CANDIDATES
+            or not isinstance(files, dict)
+        ):
             raise ValueError("invalid experiment candidate list or integrity manifest")
         for candidate in candidates:
-            if (not isinstance(candidate, dict)
-                    or not isinstance(candidate.get("configuration"), str)
-                    or not re.fullmatch(r"candidate-[0-9]{3}\.json", candidate["configuration"])
-                    or candidate["configuration"] not in files
-                    or not isinstance(candidate.get("parameters"), dict)):
+            if (
+                not isinstance(candidate, dict)
+                or not isinstance(candidate.get("configuration"), str)
+                or not re.fullmatch(r"candidate-[0-9]{3}\.json", candidate["configuration"])
+                or candidate["configuration"] not in files
+                or not isinstance(candidate.get("parameters"), dict)
+            ):
                 raise ValueError("invalid experiment configuration reference")
         for candidate in candidates:
             for field in ("run_id", "verification_run_id"):
                 run_id = candidate.get(field)
-                if run_id is not None and (not isinstance(run_id, str)
-                                          or not re.fullmatch(r"[0-9a-f]{32}", run_id)):
+                if run_id is not None and (
+                    not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id)
+                ):
                     raise ValueError("invalid experiment run reference")
-        _validate_objectives(result.get("objectives"), result.get("constraints"),
-                             result.get("required_checks"))
+        _validate_objectives(
+            result.get("objectives"), result.get("constraints"), result.get("required_checks")
+        )
         return result
 
     def list(self):
-        return sorted([self.get(path.parent.name) for path in self.root.glob("*/experiment.json")],
-                      key=lambda item: item["created"], reverse=True)
+        return sorted(
+            [self.get(path.parent.name) for path in self.root.glob("*/experiment.json")],
+            key=lambda item: item["created"],
+            reverse=True,
+        )
 
-    def create(self, config_path: Path, *, name: str, hypothesis: str = "", parameters: dict,
-               objectives: dict, constraints: dict | None = None, required_checks: list | None = None,
-               baseline: str | None = None, target: str = "finish", verify_first: bool = True):
+    def create(
+        self,
+        config_path: Path,
+        *,
+        name: str,
+        hypothesis: str = "",
+        parameters: dict,
+        objectives: dict,
+        constraints: dict | None = None,
+        required_checks: list | None = None,
+        baseline: str | None = None,
+        target: str = "finish",
+        verify_first: bool = True,
+    ):
         from .engine import STAGES
 
         if not isinstance(name, str) or not name.strip() or len(name) > 200:
@@ -157,8 +195,11 @@ class ExperimentStore:
         if not isinstance(verify_first, bool):
             raise ValueError("verify_first must be boolean")
         constraints = {} if constraints is None else constraints
-        required_checks = (["timing", "routing_drc"] if target == "finish" else []) \
-            if required_checks is None else required_checks
+        required_checks = (
+            (["timing", "routing_drc"] if target == "finish" else [])
+            if required_checks is None
+            else required_checks
+        )
         _validate_objectives(objectives, constraints, required_checks)
         project, base = load_project(Path(config_path))
         config = project.model_dump()
@@ -193,19 +234,40 @@ class ExperimentStore:
                     candidate = _apply(candidate, key, value)
                 relative = f"candidate-{index:03d}.json"
                 save(directory / relative, candidate)
-                candidates.append({"configuration": relative, "parameters": selection, "run_id": None,
-                                   "verification_run_id": None})
-            files = {str(path.relative_to(directory)): _hash(path)
-                     for path in directory.rglob("*") if path.is_file()}
+                candidates.append(
+                    {
+                        "configuration": relative,
+                        "parameters": selection,
+                        "run_id": None,
+                        "verification_run_id": None,
+                    }
+                )
+            files = {
+                str(path.relative_to(directory)): _hash(path)
+                for path in directory.rglob("*")
+                if path.is_file()
+            }
             result = {
-                "schema": 1, "id": experiment_id, "name": name, "hypothesis": hypothesis,
-                "created": time.time(), "status": "draft", "baseline_run_id": baseline,
-                "target": target, "verify_first": verify_first, "parameters": parameters,
-                "objectives": objectives, "constraints": constraints, "required_checks": required_checks,
-                "candidates": candidates, "frozen_files": files,
+                "schema": 1,
+                "id": experiment_id,
+                "name": name,
+                "hypothesis": hypothesis,
+                "created": time.time(),
+                "status": "draft",
+                "baseline_run_id": baseline,
+                "target": target,
+                "verify_first": verify_first,
+                "parameters": parameters,
+                "objectives": objectives,
+                "constraints": constraints,
+                "required_checks": required_checks,
+                "candidates": candidates,
+                "frozen_files": files,
                 "scope": "Finite Cartesian search; results describe measured eligible candidates only.",
-                "limitations": ["External toolchain and PDK are not copied; each run records its environment.",
-                                "Experiments must be backed up separately from run-history archives."],
+                "limitations": [
+                    "External toolchain and PDK are not copied; each run records its environment.",
+                    "Experiments must be backed up separately from run-history archives.",
+                ],
             }
             if len(json.dumps(result).encode()) > 4 * 1024 * 1024:
                 raise ValueError("experiment metadata exceeds 4 MiB budget")
@@ -219,7 +281,7 @@ class ExperimentStore:
         config = json.loads(json.dumps(config))
         copied_bytes = 0
         copied_files = 0
-        max_bytes = min(1024 ** 3, shutil.disk_usage(directory).free // 2)
+        max_bytes = min(1024**3, shutil.disk_usage(directory).free // 2)
 
         def snapshot(value, category, index):
             nonlocal copied_bytes, copied_files
@@ -237,7 +299,9 @@ class ExperimentStore:
                     copied_bytes += path.stat().st_size
                     copied_files += 1
                 if copied_bytes > max_bytes or copied_files > 100000:
-                    raise ValueError("experiment snapshot exceeds 1 GiB, half free disk, or 100000 files")
+                    raise ValueError(
+                        "experiment snapshot exceeds 1 GiB, half free disk, or 100000 files"
+                    )
             destination.parent.mkdir(parents=True, exist_ok=True)
             if source.is_dir():
                 shutil.copytree(source, destination)
@@ -249,18 +313,22 @@ class ExperimentStore:
             config[field] = [snapshot(value, field, i) for i, value in enumerate(config[field])]
         if config.get("simulation"):
             for field in ("testbench", "cell_models"):
-                config["simulation"][field] = [snapshot(value, field, i)
-                    for i, value in enumerate(config["simulation"].get(field, []))]
+                config["simulation"][field] = [
+                    snapshot(value, field, i)
+                    for i, value in enumerate(config["simulation"].get(field, []))
+                ]
         if config.get("sdc"):
             config["sdc"] = snapshot(config["sdc"], "constraints", 0)
         if config.get("tcl"):
             config["tcl"]["directory"] = snapshot(config["tcl"]["directory"], "tcl", 0)
         for key, values in config.get("orfs_files", {}).items():
-            config["orfs_files"][key] = [snapshot(value, f"orfs_files/{key}", i)
-                                        for i, value in enumerate(values)]
+            config["orfs_files"][key] = [
+                snapshot(value, f"orfs_files/{key}", i) for i, value in enumerate(values)
+            ]
         if config.get("physical", {}).get("ADDER_MAP_FILE"):
-            config["physical"]["ADDER_MAP_FILE"] = snapshot(config["physical"]["ADDER_MAP_FILE"],
-                                                           "adder_map", 0)
+            config["physical"]["ADDER_MAP_FILE"] = snapshot(
+                config["physical"]["ADDER_MAP_FILE"], "adder_map", 0
+            )
         config["orfs"] = str((base / Path(config["orfs"]).expanduser()).resolve())
         return config
 
@@ -269,8 +337,14 @@ class ExperimentStore:
         (self.directory(experiment_id) / "stop").touch(mode=0o600)
         return {"id": experiment_id, "stop_requested": True}
 
-    def run(self, experiment_id, *, poll_seconds: float = 0.2, stop_on_failure: bool = True,
-            resume: bool = False):
+    def run(
+        self,
+        experiment_id,
+        *,
+        poll_seconds: float = 0.2,
+        stop_on_failure: bool = True,
+        resume: bool = False,
+    ):
         """Block while sequential workers execute; holds no Store or run-state locks."""
         if not _finite(poll_seconds) or not 0.01 <= poll_seconds <= 5:
             raise ValueError("poll_seconds must be 0.01–5")
@@ -297,16 +371,32 @@ class ExperimentStore:
                         break
                     config_path = directory / candidate["configuration"]
                     if experiment["verify_first"] and experiment["target"] != "sim":
-                        verification = self._execute(experiment, candidate, "verification_run_id",
-                                                     config_path, "sim", directory, poll_seconds)
+                        verification = self._execute(
+                            experiment,
+                            candidate,
+                            "verification_run_id",
+                            config_path,
+                            "sim",
+                            directory,
+                            poll_seconds,
+                        )
                         if verification["status"] != "completed":
                             candidate["blocked"] = "RTL simulation did not complete successfully"
-                            experiment["status"] = "stopped" if (directory / "stop").exists() else "failed"
+                            experiment["status"] = (
+                                "stopped" if (directory / "stop").exists() else "failed"
+                            )
                             if stop_on_failure or experiment["status"] == "stopped":
                                 break
                             continue
-                    result = self._execute(experiment, candidate, "run_id", config_path,
-                                           experiment["target"], directory, poll_seconds)
+                    result = self._execute(
+                        experiment,
+                        candidate,
+                        "run_id",
+                        config_path,
+                        experiment["target"],
+                        directory,
+                        poll_seconds,
+                    )
                     candidate["execution_status"] = result["status"]
                     if (directory / "stop").exists():
                         experiment["status"] = "stopped"
@@ -328,8 +418,12 @@ class ExperimentStore:
     def _verify(self, experiment, directory):
         for relative, digest in experiment["frozen_files"].items():
             path = directory / relative
-            if (path.is_symlink() or not path.resolve().is_relative_to(directory.resolve())
-                    or not path.is_file() or _hash(path) != digest):
+            if (
+                path.is_symlink()
+                or not path.resolve().is_relative_to(directory.resolve())
+                or not path.is_file()
+                or _hash(path) != digest
+            ):
                 raise ValueError(f"experiment frozen-input integrity failure: {relative}")
 
     def _execute(self, experiment, candidate, field, config_path, target, directory, poll_seconds):
@@ -351,7 +445,9 @@ class ExperimentStore:
         for candidate in experiment["candidates"]:
             run_id = candidate.get("run_id")
             if not run_id:
-                excluded.append({"id": None, "parameters": candidate["parameters"], "reason": "not run"})
+                excluded.append(
+                    {"id": None, "parameters": candidate["parameters"], "reason": "not run"}
+                )
                 continue
             run = self.store.get(run_id)
             reasons = []
@@ -378,7 +474,9 @@ class ExperimentStore:
         result["search_space"] = experiment["parameters"]
         result["constraints"] = experiment["constraints"]
         result["required_checks"] = experiment["required_checks"]
-        result["note"] = "Eligibility is limited to declared checks/bounds; no signoff or global optimality claim."
+        result["note"] = (
+            "Eligibility is limited to declared checks/bounds; no signoff or global optimality claim."
+        )
         return result
 
 

@@ -58,6 +58,9 @@ def build_report(store, run_id: str) -> dict:
         "execution_status": state.get("status"),
         "quality": quality,
         "checks": checks,
+        "verification": state.get("verification", {}),
+        "resources": state.get("resources", {}),
+        "workflow": state.get("workflow", {}),
         "configuration": configuration,
         "stages": stages,
         "metrics": state.get("metrics", {}),
@@ -74,6 +77,11 @@ def build_report(store, run_id: str) -> dict:
         },
         "artifacts": store.artifacts(run_id),
         "warnings": warnings,
+        "power_analysis": {
+            "kind": "native_tool_estimates_if_present",
+            "activity_annotation": "not established by Chipflow",
+            "assumptions": "Inspect native reports for activity, frequency, voltage, Liberty model and corner; no measured power claim",
+        },
         "limitations": [DISCLAIMER, "This report does not perform additional EDA checks."],
     }
 
@@ -93,7 +101,7 @@ def render_report(report: dict, format: str = "json") -> str:
             '<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             '<meta http-equiv="Content-Security-Policy" '
-            'content="default-src \'none\'; style-src \'unsafe-inline\'">'
+            "content=\"default-src 'none'; style-src 'unsafe-inline'\">"
             f"<title>Chipflow report: {title}</title>"
             "<style>body{font:16px system-ui;margin:2rem auto;padding:0 1rem;max-width:80rem}"
             "pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f0f2f4;"
@@ -116,7 +124,8 @@ def _identity(report):
     # Store snapshot names differ between runs; category/index/name keys are stable.
     rtl = {key: value for key, value in hashes.items() if str(key).startswith("inputs/rtl/")}
     constraints = {
-        key: value for key, value in hashes.items()
+        key: value
+        for key, value in hashes.items()
         if str(key).startswith("inputs/constraints/") or key == "inputs/clocks.sdc"
     }
     config = dict(cfg)
@@ -153,7 +162,12 @@ def compare_reports(baseline: dict, candidate: dict) -> dict:
         for field in environment_check["unknown"]:
             differences.append({"field": "environment", "reason": field})
     else:
-        differences.append({"field": "environment", "reason": "complete manifest unavailable; legacy toolchain identity is partial"})
+        differences.append(
+            {
+                "field": "environment",
+                "reason": "complete manifest unavailable; legacy toolchain identity is partial",
+            }
+        )
     units_a = baseline.get("metric_provenance", {}).get("units", {})
     units_b = candidate.get("metric_provenance", {}).get("units", {})
     deltas = {}
@@ -166,15 +180,22 @@ def compare_reports(baseline: dict, candidate: dict) -> dict:
             differences.append({"field": f"units.{key}", "reason": "units differ or missing"})
             continue
         deltas[key] = {
-            "baseline": value, "candidate": other, "delta": other - value,
-            "unit": unit_a, "unit_status": "declared" if unit_a else "native metric; unit unverified",
+            "baseline": value,
+            "candidate": other,
+            "delta": other - value,
+            "unit": unit_a,
+            "unit_status": "declared" if unit_a else "native metric; unit unverified",
         }
     return {
-        "baseline": baseline["run_id"], "candidate": candidate["run_id"],
-        "compatible": not differences, "warnings": differences, "metrics": deltas,
+        "baseline": baseline["run_id"],
+        "candidate": candidate["run_id"],
+        "compatible": not differences,
+        "warnings": differences,
+        "metrics": deltas,
         "baseline_execution": baseline.get("execution_status"),
         "candidate_execution": candidate.get("execution_status"),
-        "baseline_quality": baseline.get("quality"), "candidate_quality": candidate.get("quality"),
+        "baseline_quality": baseline.get("quality"),
+        "candidate_quality": candidate.get("quality"),
         "note": "Deltas are candidate minus baseline; changed constraints can invalidate conclusions.",
     }
 
@@ -183,9 +204,12 @@ def compare_runs(store, baseline: str, candidates: list[str]) -> dict:
     if not candidates or len(candidates) > 64:
         raise ValueError("compare between 1 and 64 candidate runs")
     report = build_report(store, baseline)
-    return {"baseline": baseline, "comparisons": [
-        compare_reports(report, build_report(store, candidate)) for candidate in candidates
-    ]}
+    return {
+        "baseline": baseline,
+        "comparisons": [
+            compare_reports(report, build_report(store, candidate)) for candidate in candidates
+        ],
+    }
 
 
 def pareto_frontier(runs: list[dict], objectives: dict[str, str]) -> dict:
@@ -195,23 +219,40 @@ def pareto_frontier(runs: list[dict], objectives: dict[str, str]) -> dict:
     eligible, excluded = [], []
     for run in runs:
         if run.get("status", run.get("execution_status")) != "completed":
-            excluded.append({"id": run.get("id", run.get("run_id")), "reason": "execution incomplete"})
+            excluded.append(
+                {"id": run.get("id", run.get("run_id")), "reason": "execution incomplete"}
+            )
         elif not all(_number(run.get("metrics", {}).get(key)) for key in objectives):
-            excluded.append({"id": run.get("id", run.get("run_id")), "reason": "objective metric unavailable"})
+            excluded.append(
+                {"id": run.get("id", run.get("run_id")), "reason": "objective metric unavailable"}
+            )
         else:
             eligible.append(run)
 
     def coordinates(run):
-        return [run["metrics"][key] * (1 if direction == "min" else -1)
-                for key, direction in objectives.items()]
+        return [
+            run["metrics"][key] * (1 if direction == "min" else -1)
+            for key, direction in objectives.items()
+        ]
 
     points = [coordinates(run) for run in eligible]
-    front = [run.get("id", run.get("run_id")) for i, run in enumerate(eligible)
-             if not any(all(a <= b for a, b in zip(other, points[i], strict=True))
-                        and any(a < b for a, b in zip(other, points[i], strict=True))
-                        for j, other in enumerate(points) if j != i)]
-    return {"run_ids": front, "objectives": objectives, "evaluated": len(eligible),
-            "excluded": excluded, "scope": "Provided measured points only; no global optimum claimed."}
+    front = [
+        run.get("id", run.get("run_id"))
+        for i, run in enumerate(eligible)
+        if not any(
+            all(a <= b for a, b in zip(other, points[i], strict=True))
+            and any(a < b for a, b in zip(other, points[i], strict=True))
+            for j, other in enumerate(points)
+            if j != i
+        )
+    ]
+    return {
+        "run_ids": front,
+        "objectives": objectives,
+        "evaluated": len(eligible),
+        "excluded": excluded,
+        "scope": "Provided measured points only; no global optimum claimed.",
+    }
 
 
 def content_identity(value) -> str:

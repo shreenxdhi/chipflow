@@ -1,0 +1,13 @@
+name: tiny_cpu
+top: tiny_cpu
+rtl:
+- tiny_cpu.v
+platform: nangate45
+clocks:
+- port: clk
+  period_ns: 10
+simulation:
+  top: tb
+  testbench:
+  - tb.v
+  pass_marker: PASS

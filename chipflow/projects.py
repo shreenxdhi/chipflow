@@ -10,6 +10,7 @@ from .config import Project, load_project, safe_make_path
 from .customization import supported_points, variable_catalog
 from .engine import STAGES
 from .environment import bundled_example, discover_orfs, find_tool, flow_path, orfs_bin_dirs
+from .quality import requires_simulation
 from .setup import assess
 
 
@@ -80,15 +81,52 @@ def inspect_project(path: Path, target: str):
                 issues.append(
                     f"{label} path contains spaces or unsupported characters: {source}. Move it to a simple path before running."
                 )
-    sim = target in {"sim", "gate_sim"}
+    sim = target in {"sim", "gate_sim"} or requires_simulation(project.quality)
     if sim and not project.simulation:
         issues.append("Add a testbench and its top module to run a simulation.")
     if target == "gate_sim" and project.simulation and not project.simulation.cell_models:
         issues.append(
             "Gate simulation needs functional cell models matching your platform. Add them in Advanced settings."
         )
-    required = ["iverilog", "vvp"] if sim else []
-    if target != "sim":
+    required = []
+    if sim and project.simulation:
+        from .verification import SIMULATORS, cocotb_available
+
+        backend = (
+            project.simulation.cocotb_simulator
+            if project.simulation.backend == "cocotb"
+            else project.simulation.backend
+        )
+        required.extend(SIMULATORS[backend].binaries)
+        if (
+            project.simulation.backend == "cocotb"
+            and project.execution.backend == "native"
+            and not cocotb_available()
+        ):
+            issues.append(
+                "Install chipflow[verification] for the Cocotb backend in this Python environment."
+            )
+    if target == "lint" or project.verification.lint:
+        required.append("verilator")
+    physical = target not in {"sim", "lint"} and not (
+        target == "equivalence" and project.verification.netlist
+    )
+    if target == "equivalence" or project.verification.equivalence:
+        required.append("yosys")
+    if project.verification.netlist:
+        netlist = resolve(base, project.verification.netlist)
+        if not netlist.is_file():
+            issues.append(f"Verification netlist not found: {netlist}")
+    for library in project.verification.libraries:
+        if not resolve(base, library).is_file():
+            issues.append(f"Verification library not found: {library}")
+    if (
+        project.simulation
+        and project.simulation.python_directory
+        and not resolve(base, project.simulation.python_directory).is_dir()
+    ):
+        issues.append("Cocotb Python test directory does not exist")
+    if physical:
         required.extend(["make", "yosys", "openroad"])
         if target == "finish":
             required.append("klayout")
@@ -120,7 +158,19 @@ def inspect_project(path: Path, target: str):
         safe_make_path(resolve(base, project.orfs))
     except ValueError as exc:
         issues.append(str(exc))
-    for tool in required:
+    if project.execution.backend == "container":
+        from .execution import container_identity
+
+        try:
+            identity = container_identity(project.execution)
+            if identity.get("status") != "available":
+                issues.append(
+                    "The digest-pinned container image is not available locally. Install it explicitly before running."
+                )
+        except ValueError as exc:
+            issues.append(str(exc))
+        required = []  # Tool versions/capabilities are probed inside the selected image by the worker.
+    for tool in set(required):
         if not find_tool(tool, orfs_bin_dirs(resolve(base, project.orfs))):
             issues.append(
                 f"{tool} is not on PATH. Make it available to the Chipflow server before running this stage."
@@ -174,6 +224,15 @@ def absolute_project(project: Project, base: Path):
     if data["simulation"]:
         for field in ["testbench", "cell_models"]:
             data["simulation"][field] = [str(resolve(base, p)) for p in data["simulation"][field]]
+        if data["simulation"].get("python_directory"):
+            data["simulation"]["python_directory"] = str(
+                resolve(base, data["simulation"]["python_directory"])
+            )
+    data["verification"]["libraries"] = [
+        str(resolve(base, p)) for p in data["verification"]["libraries"]
+    ]
+    if data["verification"].get("netlist"):
+        data["verification"]["netlist"] = str(resolve(base, data["verification"]["netlist"]))
     if data["tcl"]:
         data["tcl"]["directory"] = str(resolve(base, data["tcl"]["directory"]))
     for name, values in data["orfs_files"].items():

@@ -1,0 +1,15 @@
+name: multiclock
+top: multiclock
+rtl:
+- multiclock.v
+platform: nangate45
+clocks:
+- port: clk_a
+  period_ns: 10
+- port: clk_b
+  period_ns: 14
+simulation:
+  top: tb
+  testbench:
+  - tb.v
+  pass_marker: PASS

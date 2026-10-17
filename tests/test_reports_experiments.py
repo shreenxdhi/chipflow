@@ -23,9 +23,14 @@ def project(tmp_path):
     (tmp_path / "tb.v").write_text(
         'module tb; initial begin $display("PASS"); $finish; end endmodule\n'
     )
-    config = {"name": "demo", "top": "dut", "rtl": ["design.v"],
-              "orfs": "/missing/orfs", "clocks": [{"port": "clk", "period_ns": 10}],
-              "simulation": {"top": "tb", "testbench": ["tb.v"]}}
+    config = {
+        "name": "demo",
+        "top": "dut",
+        "rtl": ["design.v"],
+        "orfs": "/missing/orfs",
+        "clocks": [{"port": "clk", "period_ns": 10}],
+        "simulation": {"top": "tb", "testbench": ["tb.v"]},
+    }
     path = tmp_path / "project.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
@@ -37,17 +42,33 @@ def report_store(tmp_path):
     run_id = "a" * 32
     directory = store.root / run_id
     directory.mkdir()
-    save(directory / "run.json", {
-        "id": run_id, "name": '<script>alert("x")</script>', "created": 1,
-        "started": 2, "finished": 5, "target": "finish", "status": "completed",
-        "checks": {"timing": "failed", "routing_drc": "passed"}, "stages": [],
-        "metrics": {"area": 12, "wns": -1, "bad_boolean": True},
-    })
-    save(directory / "manifest.json", {
-        "configuration": {"name": "demo", "top": "dut", "platform": "nangate45",
-                          "clocks": [{"port": "clk", "period_ns": 10}]},
-        "input_sha256": {"inputs/rtl/0/design.v": "123", "inputs/clocks.sdc": "456"},
-    })
+    save(
+        directory / "run.json",
+        {
+            "id": run_id,
+            "name": '<script>alert("x")</script>',
+            "created": 1,
+            "started": 2,
+            "finished": 5,
+            "target": "finish",
+            "status": "completed",
+            "checks": {"timing": "failed", "routing_drc": "passed"},
+            "stages": [],
+            "metrics": {"area": 12, "wns": -1, "bad_boolean": True},
+        },
+    )
+    save(
+        directory / "manifest.json",
+        {
+            "configuration": {
+                "name": "demo",
+                "top": "dut",
+                "platform": "nangate45",
+                "clocks": [{"port": "clk", "period_ns": 10}],
+            },
+            "input_sha256": {"inputs/rtl/0/design.v": "123", "inputs/clocks.sdc": "456"},
+        },
+    )
     save(directory / "toolchain.json", {"revision": "abc", "tools": {"yosys": {"version": "1"}}})
     save(directory / "metrics.json", {"logs/6_report.json": {"area": 12, "wns": -1}})
     return store, run_id
@@ -66,7 +87,7 @@ def test_report_preserves_negative_and_unknown_evidence(report_store):
 
 def test_report_html_and_markdown_escape_project_content(report_store):
     report = build_report(*report_store)
-    report["name"] += '\n```\n<img src=x onerror=alert(1)>'
+    report["name"] += "\n```\n<img src=x onerror=alert(1)>"
     rendered = render_report(report, "html")
     assert "<script>" not in rendered
     assert "<img" not in rendered
@@ -115,11 +136,13 @@ def test_comparison_rejects_unit_mismatch_and_missing_identity(report_store):
 
 
 def test_pareto_frontier_reports_only_explored_points():
-    runs = [{"id": "a", "status": "completed", "metrics": {"area": 10, "slack": 2}},
-            {"id": "b", "status": "completed", "metrics": {"area": 12, "slack": 1}},
-            {"id": "c", "status": "completed", "metrics": {"area": 8, "slack": 1}},
-            {"id": "d", "status": "failed", "metrics": {"area": 1, "slack": 100}},
-            {"id": "e", "status": "completed", "metrics": {"area": float("nan"), "slack": 1}}]
+    runs = [
+        {"id": "a", "status": "completed", "metrics": {"area": 10, "slack": 2}},
+        {"id": "b", "status": "completed", "metrics": {"area": 12, "slack": 1}},
+        {"id": "c", "status": "completed", "metrics": {"area": 8, "slack": 1}},
+        {"id": "d", "status": "failed", "metrics": {"area": 1, "slack": 100}},
+        {"id": "e", "status": "completed", "metrics": {"area": float("nan"), "slack": 1}},
+    ]
     result = pareto_frontier(runs, {"area": "min", "slack": "max"})
     assert set(result["run_ids"]) == {"a", "c"}
     assert len(result["excluded"]) == 2
@@ -141,9 +164,13 @@ class RecordingStore:
     def start(self, path, target):
         run_id = f"{len(self.starts) + 1:032x}"
         self.starts.append((path, target, json.loads(path.read_text())))
-        result = {"id": run_id, "status": "completed", "checks": {"timing": "passed",
-                  "routing_drc": "passed"}, "quality": {"status": "passed"},
-                  "metrics": {"area": len(self.starts), "wns": 1}}
+        result = {
+            "id": run_id,
+            "status": "completed",
+            "checks": {"timing": "passed", "routing_drc": "passed"},
+            "quality": {"status": "passed"},
+            "metrics": {"area": len(self.starts), "wns": 1},
+        }
         self.states[run_id] = result
         return result
 
@@ -156,8 +183,14 @@ class RecordingStore:
 
 
 def create_experiment(store, project, **kwargs):
-    return ExperimentStore(store).create(project, name="density study", hypothesis="Lower density may help",
-        parameters={"physical.PLACE_DENSITY": [0.3, 0.5]}, objectives={"area": "min"}, **kwargs)
+    return ExperimentStore(store).create(
+        project,
+        name="density study",
+        hypothesis="Lower density may help",
+        parameters={"physical.PLACE_DENSITY": [0.3, 0.5]},
+        objectives={"area": "min"},
+        **kwargs,
+    )
 
 
 def test_experiment_freezes_inputs_and_executes_sequential_verification_first(tmp_path, project):
@@ -170,21 +203,30 @@ def test_experiment_freezes_inputs_and_executes_sequential_verification_first(tm
     assert result["status"] == "completed"
     assert [target for _, target, _ in store.starts] == ["sim", "finish", "sim", "finish"]
     assert Path(store.starts[0][2]["rtl"][0]).read_text().startswith("module dut")
-    assert store.starts[0][2]["physical"]["PLACE_DENSITY"] == .3
-    assert store.starts[2][2]["physical"]["PLACE_DENSITY"] == .5
+    assert store.starts[0][2]["physical"]["PLACE_DENSITY"] == 0.3
+    assert store.starts[2][2]["physical"]["PLACE_DENSITY"] == 0.5
     assert result["analysis"]["run_ids"] == ["2".zfill(32)]
     experiments.run(experiment["id"])
     assert len(store.starts) == 4  # No duplicated runs on a repeated controller call.
     assert experiments.list()[0]["hypothesis"] == "Lower density may help"
 
 
-@pytest.mark.parametrize("parameters", [
-    {"physical.SHELL": [1]}, {"physical.PLACE_DENSITY": [0]},
-    {"physical.PLACE_DENSITY": [float("inf")]}, {"clock.missing.period_ns": [5]},
-    {"clock.clk.period_ns": [10, 10]}, {"physical.CORE_UTILIZATION": [101]},
-    {"physical.PLACE_DENSITY": list(range(65))},
-    {"clock.clk.period_ns": list(range(1, 10)), "physical.CORE_UTILIZATION": list(range(1, 10))},
-])
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"physical.SHELL": [1]},
+        {"physical.PLACE_DENSITY": [0]},
+        {"physical.PLACE_DENSITY": [float("inf")]},
+        {"clock.missing.period_ns": [5]},
+        {"clock.clk.period_ns": [10, 10]},
+        {"physical.CORE_UTILIZATION": [101]},
+        {"physical.PLACE_DENSITY": list(range(65))},
+        {
+            "clock.clk.period_ns": list(range(1, 10)),
+            "physical.CORE_UTILIZATION": list(range(1, 10)),
+        },
+    ],
+)
 def test_experiment_invalid_sweeps_create_no_drafts(tmp_path, project, parameters):
     experiments = ExperimentStore(RecordingStore(tmp_path / "runs"))
     with pytest.raises(ValueError):
@@ -199,8 +241,9 @@ def test_experiment_does_not_rewrite_custom_sdc(tmp_path, project):
     project.write_text(yaml.safe_dump(config))
     experiments = ExperimentStore(RecordingStore(tmp_path / "runs"))
     with pytest.raises(ValueError, match="custom SDC"):
-        experiments.create(project, name="bad", parameters={"clock.clk.period_ns": [5]},
-                           objectives={"area": "min"})
+        experiments.create(
+            project, name="bad", parameters={"clock.clk.period_ns": [5]}, objectives={"area": "min"}
+        )
 
 
 def test_experiment_rejects_corrupt_snapshot_and_candidate_traversal(tmp_path, project):
@@ -258,11 +301,13 @@ def test_experiment_stop_cancels_active_without_launching_next(tmp_path, project
     experiments = ExperimentStore(store)
     experiment = create_experiment(store, project, target="sim")
     result = {}
-    worker = threading.Thread(target=lambda: result.update(experiments.run(experiment["id"], poll_seconds=.01)))
+    worker = threading.Thread(
+        target=lambda: result.update(experiments.run(experiment["id"], poll_seconds=0.01))
+    )
     worker.start()
     deadline = time.monotonic() + 3
     while not store.starts and time.monotonic() < deadline:
-        time.sleep(.01)
+        time.sleep(0.01)
     experiments.request_stop(experiment["id"])
     worker.join(timeout=3)
     assert not worker.is_alive()
@@ -280,7 +325,7 @@ def test_native_icarus_experiment_and_report(tmp_path, project, monkeypatch):
     store = Store(tmp_path / "native-runs")
     experiments = ExperimentStore(store)
     experiment = create_experiment(store, project, target="sim")
-    result = experiments.run(experiment["id"], poll_seconds=.05)
+    result = experiments.run(experiment["id"], poll_seconds=0.05)
     assert result["status"] == "completed"
     assert len(result["candidates"]) == 2
     for candidate in result["candidates"]:
@@ -292,10 +337,15 @@ def test_native_icarus_experiment_and_report(tmp_path, project, monkeypatch):
     assert result["analysis"]["run_ids"] == []  # Icarus provides no physical area metric.
 
 
-@pytest.mark.parametrize("field,value", [
-    ("created", "yesterday"), ("target", "unknown"), ("status", "success"),
-    ("verify_first", "false"),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("created", "yesterday"),
+        ("target", "unknown"),
+        ("status", "success"),
+        ("verify_first", "false"),
+    ],
+)
 def test_corrupt_experiment_metadata_has_controlled_error(tmp_path, project, field, value):
     store = RecordingStore(tmp_path / "runs")
     experiments = ExperimentStore(store)

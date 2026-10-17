@@ -8,6 +8,7 @@ import re
 import subprocess
 
 from .environment import discover_orfs, find_tool, flow_path, orfs_bin_dirs, settings_path
+from .resources import inventory
 
 ORFS_DOCS = "https://openroad-flow-scripts.readthedocs.io/en/latest/"
 SOURCES = {
@@ -168,6 +169,7 @@ def assess(
         "target": target,
         "platform": platform,
         "host": host,
+        "resources": inventory(),
         "bin_dirs": bin_dirs or [],
         "orfs": str(flow),
         "platforms": available_platforms,

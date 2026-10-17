@@ -113,7 +113,18 @@ def read_state(path: Path) -> dict:
             if (
                 not isinstance(stage, dict)
                 or stage.get("name")
-                not in {"sim", "synth", "gate_sim", "floorplan", "place", "cts", "route", "finish"}
+                not in {
+                    "sim",
+                    "synth",
+                    "gate_sim",
+                    "floorplan",
+                    "place",
+                    "cts",
+                    "route",
+                    "finish",
+                    "lint",
+                    "equivalence",
+                }
                 or stage.get("status")
                 not in {"pending", "running", "completed", "failed", "cancelled", "interrupted"}
             ):

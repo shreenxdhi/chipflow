@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 from . import __version__
+from .config import load_project
 from .customization import TCL_POINTS, supported_points, variable_catalog
 from .engine import STAGES, TERMINAL, Store, doctor
 from .environment import (
@@ -22,7 +23,7 @@ from .setup import assess, format_report
 from .storage import read_log
 
 
-def wait_for_run(store, run_id, quiet=False):
+def wait_for_run(store, run_id, quiet=False, require_quality=False, json_only=False):
     offset = 0
     previous_stage = None
     try:
@@ -34,18 +35,20 @@ def wait_for_run(store, run_id, quiet=False):
             stage = next(
                 (item["name"] for item in state["stages"] if item["status"] == "running"), None
             )
-            if quiet and stage and stage != previous_stage:
+            if quiet and not json_only and stage and stage != previous_stage:
                 print(f"Running: {stage}", flush=True)
                 previous_stage = stage
             path = store.directory(run_id) / "console.log"
-            if path.exists() and not quiet:
+            if path.exists() and not quiet and not json_only:
                 chunk = read_log(path, offset, final=finished)
                 sys.stdout.write(chunk["text"])
                 sys.stdout.flush()
                 progressed = chunk["offset"] != offset
                 offset, more = chunk["offset"], chunk["more"]
             if finished and not more:
-                if quiet:
+                if json_only:
+                    print(json.dumps(state, indent=2))
+                elif quiet:
                     print(f"{state['name']}: {state['status']}. Run ID: {run_id}")
                     print(f"Saved outputs: {store.directory(run_id)}")
                     if state.get("error"):
@@ -56,7 +59,17 @@ def wait_for_run(store, run_id, quiet=False):
                         )
                 else:
                     print(json.dumps(state, indent=2))
-                return 0 if state["status"] == "completed" else 1
+                if state["status"] != "completed":
+                    return 1
+                if require_quality and state.get("quality", {}).get("status") != "passed":
+                    return 2
+                if (
+                    state.get("target") == "equivalence"
+                    and state.get("verification", {}).get("equivalence", {}).get("status")
+                    != "proven"
+                ):
+                    return 2
+                return 0
             if not more or not progressed:
                 time.sleep(0.25)
     except KeyboardInterrupt:
@@ -95,7 +108,11 @@ def parser():
     item.add_argument(
         "--save", action="store_true", help="remember the provided ORFS/tool directories"
     )
-    item.add_argument("--target", choices=STAGES, default="finish")
+    item.add_argument(
+        "--target",
+        choices=[s for s in STAGES if s not in {"lint", "equivalence"}],
+        default="finish",
+    )
     item.add_argument("--platform", default="nangate45")
     item.add_argument("--json", action="store_true", help="machine-readable assessment")
     item.add_argument("--check", action="store_true", help="check only; never prompt")
@@ -145,6 +162,53 @@ def parser():
     item.add_argument("config", type=Path)
     item.add_argument("--target", choices=STAGES, default="sim")
     item.add_argument("--wait", action="store_true")
+    item.add_argument(
+        "--require-quality", action="store_true", help="exit 2 unless declared quality gates pass"
+    )
+    item.add_argument(
+        "--json", action="store_true", help="emit only final machine-readable state with --wait"
+    )
+    for name in ["lint", "sim", "equivalence"]:
+        item = commands.add_parser(name, help=f"run supervised {name} checks on a project")
+        item.add_argument("config", type=Path)
+        item.add_argument("--wait", action="store_true")
+        item.add_argument("--require-quality", action="store_true")
+        item.add_argument("--json", action="store_true")
+    item = commands.add_parser(
+        "import", help="discover RTL sources; confirm ordering and top before creating a project"
+    )
+    item.add_argument("directory", type=Path)
+    for name in ["quality", "timing", "diagnostics", "environment"]:
+        item = commands.add_parser(name, help=f"show saved {name} evidence")
+        item.add_argument("id")
+    item = commands.add_parser(
+        "constraints", help="inventory project SDC; static review is not endpoint coverage"
+    )
+    item.add_argument("config", type=Path)
+    item = commands.add_parser("sdc", help="write guided SDC from explicit JSON timing assumptions")
+    item.add_argument("spec", type=Path)
+    item.add_argument("--output", type=Path, required=True)
+    item = commands.add_parser("report", help="export traceable engineering results")
+    item.add_argument("id")
+    item.add_argument("--format", choices=["json", "markdown", "html"], default="markdown")
+    item.add_argument("--output", type=Path)
+    item = commands.add_parser(
+        "experiments", help="create and run bounded local parameter experiments"
+    )
+    experiments = item.add_subparsers(dest="experiment_command", required=True)
+    experiments.add_parser("list")
+    item = experiments.add_parser("create")
+    item.add_argument("config", type=Path)
+    item.add_argument(
+        "spec",
+        type=Path,
+        help="JSON name/hypothesis/parameters/objectives/constraints/required_checks/target",
+    )
+    for name in ["show", "run", "stop", "analyze"]:
+        item = experiments.add_parser(name)
+        item.add_argument("id")
+        if name == "run":
+            item.add_argument("--resume", action="store_true")
     commands.add_parser("history", help="list saved runs as JSON")
     item = commands.add_parser("backup", help="back up completed run history and saved inputs")
     item.add_argument("archive", type=Path)
@@ -166,6 +230,39 @@ def parser():
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
+        if args.command == "import":
+            from .importing import discover_sources
+
+            print(json.dumps(discover_sources(args.directory), indent=2))
+            return 0
+        if args.command == "sdc":
+            from .constraints import write_guided_sdc
+
+            if args.spec.stat().st_size > 1024 * 1024:
+                raise ValueError("Guided SDC specification exceeds 1 MiB")
+            print(
+                json.dumps(
+                    write_guided_sdc(json.loads(args.spec.read_text()), args.output), indent=2
+                )
+            )
+            return 0
+        if args.command == "constraints":
+            from .constraints import analyze_constraints, inspect_constraints
+
+            project, base = load_project(args.config)
+            result = (
+                inspect_constraints(base / project.sdc)
+                if project.sdc
+                else analyze_constraints(
+                    "".join(
+                        f"create_clock -name {c.port} -period {c.period_ns} [get_ports {{{c.port}}}]\n"
+                        for c in project.clocks
+                    ),
+                    generated=True,
+                )
+            )
+            print(json.dumps(result, indent=2))
+            return 0
         if args.command == "guide":
             print(
                 json.dumps({"lessons": LESSONS, "glossary": GLOSSARY}, indent=2)
@@ -293,6 +390,69 @@ def main(argv=None):
             uvicorn.run(create_app(args.runs), host="127.0.0.1", port=args.port)
             return 0
         store = Store(args.runs)
+        if args.command in {"quality", "timing", "diagnostics", "environment", "report"}:
+            state = store.get(args.id)
+            directory = store.directory(args.id)
+            if args.command == "quality":
+                result = state.get(
+                    "quality",
+                    {
+                        "status": "unknown",
+                        "reason": "Historical run has no recorded quality policy",
+                    },
+                )
+            elif args.command == "timing":
+                result = {
+                    "checks": state["checks"],
+                    "metrics": state.get("metrics", {}),
+                    "provenance": state.get("metric_provenance", {}),
+                    "quality": state.get("quality"),
+                    "scope": "Recorded native report metrics; not full signoff or constraint coverage",
+                }
+            elif args.command == "environment":
+                path = directory / "environment-manifest.json"
+                result = (
+                    json.loads(path.read_text())
+                    if path.exists()
+                    else {"status": "unknown", "reason": "Historical environment manifest missing"}
+                )
+            elif args.command == "diagnostics":
+                from .diagnostics import diagnose_log
+
+                result = diagnose_log(store.artifact(args.id, "console.log"))
+            else:
+                from .reports import build_report, render_report
+
+                output = render_report(build_report(store, args.id), args.format)
+                if args.output:
+                    with args.output.open("x") as stream:
+                        stream.write(output)
+                else:
+                    print(output)
+                return 0
+            print(json.dumps(result, indent=2))
+            return 0
+        if args.command == "experiments":
+            from .experiments import ExperimentStore
+
+            experiments = ExperimentStore(store)
+            if args.experiment_command == "list":
+                result = experiments.list()
+            elif args.experiment_command == "create":
+                if args.spec.stat().st_size > 1024 * 1024:
+                    raise ValueError("Experiment specification exceeds 1 MiB")
+                spec = json.loads(args.spec.read_text())
+                result = experiments.create(args.config, **spec)
+            elif args.experiment_command == "run":
+                result = experiments.run(args.id, resume=args.resume)
+            elif args.experiment_command == "stop":
+                result = experiments.request_stop(args.id)
+            elif args.experiment_command == "analyze":
+                result = experiments.analyze(args.id)
+            else:
+                result = experiments.get(args.id)
+            print(json.dumps(result, indent=2))
+            return int(args.experiment_command == "run" and result.get("status") != "completed")
         if args.command == "quickstart":
             for target in ["sim", "finish"] if args.target == "finish" else ["sim"]:
                 report = assess(target=target, versions=False)
@@ -335,10 +495,19 @@ def main(argv=None):
             result = store.start(config, args.target)
             print(json.dumps(result, indent=2), flush=True)
             return wait_for_run(store, result["id"])
-        if args.command == "run":
-            result = store.start(args.config, args.target)
-            print(json.dumps(result, indent=2), flush=True)
-            return wait_for_run(store, result["id"]) if args.wait else 0
+        if args.command in {"run", "lint", "sim", "equivalence"}:
+            result = store.start(
+                args.config, args.target if args.command == "run" else args.command
+            )
+            if not (args.wait and args.json):
+                print(json.dumps(result, indent=2), flush=True)
+            return (
+                wait_for_run(
+                    store, result["id"], require_quality=args.require_quality, json_only=args.json
+                )
+                if args.wait
+                else 0
+            )
         if args.command == "history":
             result = store.history()
         elif args.command == "status":
