@@ -17,14 +17,27 @@ chipflow setup
 The [1.1.1 release](https://github.com/shreenxdhi/chipflow/releases/tag/v1.1.1)
 and [Homebrew tap](https://github.com/shreenxdhi/homebrew-chipflow) are available.
 The first Homebrew installation builds dependencies from source and may take
-several minutes. Python users with Python 3.11 or newer can install the tagged source:
+several minutes.
+
+With Python 3.11 or newer, install from [PyPI](https://pypi.org/project/chipflow/)
+using pipx:
 
 ```sh
-pipx install 'git+https://github.com/shreenxdhi/chipflow.git@v1.1.1'
+pipx install chipflow
+chipflow setup
 ```
 
-PyPI publication is pending maintainer account configuration; `pipx install chipflow`
-is not yet an available installation route. See [release instructions](docs/RELEASING.md).
+Alternatively, install with pip inside a virtual environment:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install chipflow
+chipflow setup
+```
+
+Version [1.1.1 is published on PyPI](https://pypi.org/project/chipflow/1.1.1/).
+See [release instructions](docs/RELEASING.md).
 Installing the manager does not install or modify EDA tools or platform data.
 
 ## Check and configure prerequisites
