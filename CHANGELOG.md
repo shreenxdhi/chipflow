@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1
+
+- Learning progress counts only the seven lesson stages and follows runs retried
+  from saved inputs, including gate simulations, without inflating completion.
+- Loading workspace settings preserves a configuration path already entered or
+  selected by the user while initialization is in progress.
+
 ## 1.1.0
 
 - Beginner quickstart runs a real self-checking counter simulation after checking

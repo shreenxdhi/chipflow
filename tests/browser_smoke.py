@@ -64,6 +64,23 @@ with sync_playwright() as p:
     page.reload()
     expect(page.locator("#learning-progress")).to_contain_text("1 of 7")
 
+    # Gate simulation contributes synthesis once; retries follow their original project.
+    history = page.request.get("/api/runs").json()
+    retry_example = next(run for run in history if run["id"] == seed_id)
+    retry_example["source_config"] = f"/runs/{learning_id}/project.json"
+    retry_example["target"] = "gate_sim"
+    retry_example["stages"] = [
+        {"name": "synth", "status": "completed"},
+        {"name": "gate_sim", "status": "completed"},
+    ]
+    page.route("**/api/runs", lambda route: route.fulfill(json=history))
+    page.reload()
+    expect(page.locator("#learning-progress")).to_contain_text("2 of 7")
+    expect(page.locator("#learn-next")).to_contain_text("Plan the chip")
+    page.unroute("**/api/runs")
+    page.reload()
+    expect(page.locator("#learning-progress")).to_contain_text("1 of 7")
+
     # Expert mode exposes a complete YAML copy, validates errors, and persists.
     page.locator("#experience").select_option("expert")
     expect(page.locator("#learning")).not_to_be_visible()
@@ -143,7 +160,7 @@ with sync_playwright() as p:
     expect(page.locator("#log-output")).to_contain_text("PASS: counter self-check")
     page.get_by_role("searchbox", name="Find in logs").fill("PASS")
     expect(page.locator("#log-output")).to_contain_text("PASS: counter self-check")
-    assert "$ iverilog" not in page.locator("#log-output").inner_text()
+    expect(page.locator("#log-output")).not_to_contain_text("$ iverilog")
     page.get_by_role("checkbox", name="Follow output").uncheck()
     frozen = page.locator("#log-output").inner_text()
     config_snapshot = page.request.get(f"/api/runs/{run_id}/artifacts/project.json").json()
@@ -164,7 +181,7 @@ with sync_playwright() as p:
     page.get_by_role("tab", name="Files", exact=True).click()
     page.get_by_role("searchbox", name="Search output files").fill(".vcd")
     expect(page.locator(".artifacts")).to_contain_text("Waveform")
-    assert "project.json" not in page.locator(".artifacts").inner_text()
+    expect(page.locator(".artifacts")).not_to_contain_text("project.json")
 
     page.locator(".run input").nth(0).check()
     page.locator(".run input").nth(1).check()
