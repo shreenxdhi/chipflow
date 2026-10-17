@@ -31,7 +31,7 @@ upstream EDA executables. Commands below assume those binaries are on PATH.
 
 | Command / evidence | Result | Classification |
 | --- | --- | --- |
-| `python -m pytest -q` | 312 passed, 1 skipped, 0 failed; 60.11 seconds at recorded integration checkpoint | Mixed unit/application doubles and real integrations; not 312 engineering proofs |
+| `python -m pytest -q` | 313 passed, 1 skipped, 0 failed; 66.93 seconds at recorded integration checkpoint | Mixed unit/application doubles and real integrations; not 313 engineering proofs |
 | `pytest -q tests/test_verification_adapters.py tests/test_reference_designs.py` | Real Icarus/Verilator/Cocotb/Yosys positive and negative cases passed; source boundary additions also passed | Passed with real tools for native cases; application parser tests separately |
 | `pytest -q tests/test_inspection_physical.py` | 30 passed after distro-Yosys compatibility fix | Real KLayout/Yosys inspection plus application/deck-plan parser tests; no foundry verification |
 | `pytest -q tests/test_workspace_security.py` | 11 passed | Real Icarus strict retry and real guardian delayed-cleanup process tests; other API/path/parser application tests |
@@ -52,6 +52,7 @@ structural checks and the focused 30-test inspection suite passed after correcti
 One warning is an upstream Starlette/httpx deprecation. Browser testing used the
 installed Chromium executable; Firefox/WebKit and ARM/macOS hosts are unqualified.
 Hosted GitHub Actions execution is separate from the recorded local results.
+The hosted native-verification job passed after the distro-Yosys correction.
 
 The Docker acceptance used Ubuntu pinned at
 `sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac`
