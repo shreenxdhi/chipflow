@@ -31,9 +31,9 @@ upstream EDA executables. Commands below assume those binaries are on PATH.
 
 | Command / evidence | Result | Classification |
 | --- | --- | --- |
-| `python -m pytest -q` | 302 passed, 1 skipped, 0 failed; 50.20 seconds at recorded integration checkpoint | Mixed unit/application doubles and real integrations; not 302 engineering proofs |
+| `python -m pytest -q` | 312 passed, 1 skipped, 0 failed; 60.11 seconds at recorded integration checkpoint | Mixed unit/application doubles and real integrations; not 312 engineering proofs |
 | `pytest -q tests/test_verification_adapters.py tests/test_reference_designs.py` | Real Icarus/Verilator/Cocotb/Yosys positive and negative cases passed; source boundary additions also passed | Passed with real tools for native cases; application parser tests separately |
-| `pytest -q tests/test_inspection_physical.py` | 29 passed at checkpoint | Real KLayout/Yosys inspection plus application/deck-plan parser tests; no foundry verification |
+| `pytest -q tests/test_inspection_physical.py` | 30 passed after distro-Yosys compatibility fix | Real KLayout/Yosys inspection plus application/deck-plan parser tests; no foundry verification |
 | `pytest -q tests/test_workspace_security.py` | 11 passed | Real Icarus strict retry and real guardian delayed-cleanup process tests; other API/path/parser application tests |
 | `python tests/browser_smoke.py` | Passed | Real Chromium, Icarus, learning/expert, retry/cancel and narrow viewport |
 | `python tests/browser_workspace.py` | Passed | Real Chromium import/save/standard simulation, waveform search/zoom/cursors, reports, layout image loading; geometric viewer fixture is not an implementation flow |
@@ -42,6 +42,12 @@ upstream EDA executables. Commands below assume those binaries are on PATH.
 | `python -m build`; `twine check dist/*`; `python scripts/check_distribution.py dist` | Passed at checkpoint | Packaging checks |
 | `python scripts/wheel_smoke.py dist/*.whl --require-sim` | Clean install, bundled demo, simulation and installed dashboard passed | Real wheel install and Icarus |
 | `python -m pip_audit -r requirements-runtime.txt` | No known vulnerabilities found | Runtime dependency audit; not an absence-of-vulnerabilities proof |
+
+A final fully provisioned run found an onboarding test depended on a host having
+missing tools. Its environment was isolated to an explicitly missing ORFS path
+without changing its assertions. Hosted native CI also exposed an older Yosys
+`tee -o` filename-quoting difference; a fixed relative report name preserves all
+structural checks and the focused 30-test inspection suite passed after correction.
 
 One warning is an upstream Starlette/httpx deprecation. Browser testing used the
 installed Chromium executable; Firefox/WebKit and ARM/macOS hosts are unqualified.
