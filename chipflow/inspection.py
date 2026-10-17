@@ -190,7 +190,7 @@ def netlist_plan(path, top, directory: Path, libraries=(), timeout_seconds=60):
             f"hierarchy -check -top {top}",
             "proc",
             "check -assert",
-            f"tee -o {_quoted(directory / 'inspection-netlist.json')} stat -json",
+            "tee -o inspection-netlist.json stat -json",
         ]
     )
     script = directory / "inspect-netlist.ys"

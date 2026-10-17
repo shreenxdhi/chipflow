@@ -261,3 +261,16 @@ def test_native_layoutview_preview_real_png_top_and_source_coordinates(tmp_path)
     assert not (tmp_path / "wrong.png").exists()
     with pytest.raises(ValueError):
         preview_gds(source, source, "dut")
+
+
+def test_netlist_report_uses_portable_relative_tee_path(tmp_path):
+    # Older supported distro Yosys versions do not unquote tee -o filenames.
+    source = tmp_path / "netlist.v"
+    source.write_text("module dut; endmodule\n")
+    directory = tmp_path / "analysis with spaces"
+    plan = netlist_plan(source, "dut", directory)
+    assert plan.cwd == directory.resolve()
+    assert (
+        "tee -o inspection-netlist.json stat -json"
+        in (directory / "inspect-netlist.ys").read_text()
+    )
