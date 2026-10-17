@@ -18,6 +18,8 @@ from .projects import inspect_project, list_projects
 from .setup import assess, format_report
 
 LABELS = {
+    "lint": "RTL lint",
+    "equivalence": "Formal equivalence",
     "sim": "RTL simulation",
     "synth": "Synthesis",
     "gate_sim": "Gate simulation",
@@ -61,6 +63,8 @@ def elapsed(run: dict) -> str:
 
 
 def stage_names(target: str) -> list[str]:
+    if target in {"lint", "equivalence"}:
+        return [target]
     return (
         ["sim"]
         if target == "sim"
@@ -418,6 +422,16 @@ class Dashboard:
                 run.get("error", "Saved inputs and output files remain available."),
                 "",
             ]
+        quality = run.get("quality", {})
+        lines += [
+            f"Quality policy: {quality.get('policy', 'legacy')} / {quality.get('status', 'not verified')}"
+        ]
+        for check in quality.get("checks", []):
+            if check.get("required") and check.get("status") != "passed":
+                lines.append(
+                    f"  {check.get('id', check.get('name', 'check'))}: {check.get('status', 'unknown')}"
+                )
+        lines.append("")
         if run["target"] not in {"sim", "gate_sim"}:
             lines += ["DESIGN CHECKS (separate from completion)"]
             for key, label in [
@@ -514,6 +528,8 @@ class Dashboard:
             "interrupted": "!",
         }
         short = {
+            "lint": "LINT",
+            "equivalence": "EQV",
             "synth": "SYN",
             "floorplan": "FP",
             "place": "PL",

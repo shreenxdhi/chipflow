@@ -18,6 +18,12 @@ from pathlib import Path
 from .config import safe_make_path
 from .environment import activate_environment, orfs_bin_dirs, read_settings, write_settings
 
+# Bound metadata while reading; do not materialize an unbounded tar table first.
+MAX_ARCHIVE_MEMBERS = 200000
+MAX_ARCHIVE_METADATA_BYTES = 64 * 1024 * 1024
+MAX_MEMBER_PATH_BYTES = 4096
+MAX_SUITE_EXPANDED_BYTES = 8 * 1024**3
+
 ORFS_REVISION = "1ff305ccbe694958d0125f0695dceefb58dfb3f6"
 ORFS_REPOSITORY = "https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts.git"
 ORFS_SOURCE_DOCS = (
@@ -448,12 +454,26 @@ def install_suite(download: dict) -> None:
                 raise ValueError("Downloaded archive does not match the approved size and SHA-256")
             unpacked = Path(temporary) / "unpacked"
             with tarfile.open(archive_path, "r:gz") as archive:
-                members = archive.getmembers()
-                if len(members) > 200000 or sum(m.size for m in members) > 8 * 1024**3:
-                    raise ValueError("Archive exceeds extraction limits")
+                members = []
+                metadata_bytes = 0
+                expanded_bytes = 0
+                for member in archive:
+                    path_bytes = len(member.name.encode("utf-8", "surrogateescape"))
+                    metadata_bytes += (
+                        512 + path_bytes + len(member.linkname.encode("utf-8", "surrogateescape"))
+                    )
+                    expanded_bytes += member.size
+                    if (
+                        len(members) >= MAX_ARCHIVE_MEMBERS
+                        or path_bytes > MAX_MEMBER_PATH_BYTES
+                        or metadata_bytes > MAX_ARCHIVE_METADATA_BYTES
+                        or expanded_bytes > MAX_SUITE_EXPANDED_BYTES
+                    ):
+                        raise ValueError("Archive exceeds extraction limits")
+                    members.append(member)
                 if any(m.name.split("/")[0] != "oss-cad-suite" for m in members):
                     raise ValueError("Archive has an unexpected root directory")
-                archive.extractall(unpacked, filter="data")
+                archive.extractall(unpacked, members=members, filter="data")
             suite = unpacked / "oss-cad-suite"
             for tool in ["iverilog", "vvp", "yosys"]:
                 if not (suite / "bin" / tool).is_file():

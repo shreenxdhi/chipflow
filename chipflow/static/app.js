@@ -2,6 +2,8 @@ const $ = selector => document.querySelector(selector);
 const terminal = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
 const physicalStages = ['synth', 'floorplan', 'place', 'cts', 'route', 'finish'];
 const stages = {
+  lint: ['RTL lint', 'Runs the configured native lint tool and records its diagnostics.'],
+  equivalence: ['Formal equivalence', 'Checks RTL and synthesized netlist equivalence using the configured proof tool.'],
   sim: ['RTL simulation', 'Runs your testbench. Success requires a zero exit code and your configured success message.'],
   gate_sim: ['Gate simulation', 'Synthesizes your design, then tests the gates using your testbench and compatible cell models.'],
   synth: ['Synthesis', 'Converts RTL into a gate-level netlist using the selected technology library.'],
@@ -16,6 +18,7 @@ let selected = null, offset = 0, logText = '', tab = 'overview', lastState = '',
 const logLimit = 2 * 1024 * 1024;
 let logTrimmed = false, pausedLogText = null;
 let runs = [], projects = [], environment = null, historyKey = '', filesCache = new Map();
+let logSeverity = 'all';
 let logQuery = '', fileQuery = '', followLogs = true, editorBase = null, starting = false;
 const checked = new Set(), cancelling = new Set();
 let requestedRun = new URLSearchParams(location.search).get('run');
@@ -34,7 +37,7 @@ function renderLiveRun() {
   const current = run.stages.find(stage => stage.status === 'running');
   const key = JSON.stringify([run.id, run.status, current?.name, run.stages.length]);
   if (key === liveKey) return; liveKey = key; box.replaceChildren();
-  const text = node('div'); text.append(node('strong', '● Live: ' + run.name), node('p', current ? `${stages[current.name][0]} · stage ${run.stages.length} of ${stageList(run.target).length}` : 'Preparing inputs and tools…'));
+  const text = node('div'); text.append(node('strong', '● Live: ' + run.name), node('p', current ? `${stages[current.name][0]} · stage ${run.stages.length} of ${stageList(run.target, run.stages).length}` : 'Preparing inputs and tools…'));
   box.append(text, button('Watch live execution →', () => { select(run.id); changeTab('logs'); $('#detail').scrollIntoView({block: 'start', behavior: 'smooth'}); }));
 }
 
@@ -88,8 +91,9 @@ function duration(start, end = Date.now() / 1000) {
   const seconds = Math.max(0, Math.round(end - start));
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
-function stageList(target) {
-  return target === 'sim' ? ['sim'] : target === 'gate_sim' ? ['synth', 'gate_sim'] : physicalStages.slice(0, physicalStages.indexOf(target) + 1);
+function stageList(target, records = []) {
+  const expected = target === 'equivalence' ? [...(records.some(stage => stage.name === 'synth') ? ['synth'] : []), 'equivalence'] : target === 'lint' ? ['lint'] : target === 'sim' ? ['sim'] : target === 'gate_sim' ? ['synth', 'gate_sim'] : physicalStages.slice(0, physicalStages.indexOf(target) + 1);
+  return [...records.map(stage => stage.name).filter(name => !expected.includes(name)), ...expected];
 }
 function prettyMetric(key) {
   const known = {'finish__timing__setup__ws': 'Setup slack (ns)', 'finish__timing__hold__ws': 'Hold slack (ns)', 'finish__design__instance__area': 'Cell area (µm²)', 'finish__design__instance__count': 'Cell count', 'finish__power__total': 'Estimated power (W)', 'finish__timing__fmax': 'Maximum frequency (Hz)'};
@@ -102,7 +106,7 @@ function number(value) {
 function select(id) {
   if (selected === id) return;
   selected = id; offset = 0; logText = ''; logTrimmed = false; pausedLogText = null; lastState = ''; tab = 'overview';
-  logQuery = ''; fileQuery = ''; followLogs = true;
+  logQuery = ''; logSeverity = 'all'; fileQuery = ''; followLogs = true;
   try { localStorage.setItem('chipflow.selected', id); } catch {}
   updateLocation();
 }
@@ -172,6 +176,53 @@ function checkCard(label, value, explanation) {
   card.append(node('span', label), node('strong', value === 'unknown' || !value ? 'Not verified' : value === 'passed' ? 'Passed' : 'Needs attention', 'check-value ' + (value || 'unknown')), node('p', explanation));
   return card;
 }
+function layoutPreview(run, files) {
+  const file = files.find(item => item.path === 'layout-preview.png');
+  if (!file) return null;
+  const figure = node('figure', undefined, 'layout-preview');
+  const image = node('img'); image.loading = 'lazy'; image.alt = 'Native KLayout rendering of the saved GDS layout; visual inspection does not establish DRC or LVS.';
+  image.src = artifactLink(run, file).href;
+  image.onerror = () => { figure.replaceChildren(node('p', 'The saved layout preview could not be loaded. Download the image and native inspection metadata from Files.')); };
+  figure.append(image, node('figcaption', 'Saved native KLayout layout preview. This image does not establish timing closure, DRC, or LVS.'), artifactLink(run, file, 'Download layout image'));
+  const metadata = files.find(item => item.path === 'layout-preview.json'); if (metadata) figure.append(artifactLink(run, metadata, 'Native preview metadata'));
+  return figure;
+}
+function qualityPanel(run) {
+  const quality = run.quality;
+  const section = node('section', undefined, 'quality-panel'); section.setAttribute('aria-label', 'Run quality gates');
+  section.append(node('h3', 'Engineering quality'), node('p', `Execution: ${statusNames[run.status] || run.status}. Quality: ${quality?.status || 'not evaluated'}${quality?.policy ? ' · policy: ' + quality.policy : ''}.`));
+  if (!quality) { section.append(node('p', 'This run has no recorded quality-gate evaluation. Review its individual checks and native reports.')); return section; }
+  if (quality.scope) section.append(node('p', quality.scope));
+  const table = node('table'); table.append(node('caption', 'Recorded quality requirements; missing evidence is not a pass'));
+  const head = node('tr'); for (const text of ['Check', 'Result', 'Evidence']) head.append(node('th', text)); table.append(head);
+  for (const check of quality.checks || []) {
+    const row = node('tr'); const name = node('th', `${check.name}${check.required ? ' (required)' : ''}`); name.scope = 'row';
+    const details = [check.reason, check.value !== undefined && check.value !== null ? `Value: ${JSON.stringify(check.value)}` : '', check.limit !== undefined && check.limit !== null ? `Limit: ${JSON.stringify(check.limit)}` : '', typeof check.evidence === 'string' ? check.evidence : check.evidence ? JSON.stringify(check.evidence) : ''].filter(Boolean).join(' · ');
+    row.append(name, node('td', check.status || 'unknown'), node('td', details || 'No evidence recorded')); table.append(row);
+  }
+  section.append(table); return section;
+}
+async function inspectStage(run, name) {
+  const content = $('#stage-content'); content.replaceChildren(); $('#stage-heading').textContent = stages[name][0];
+  const stage = run.stages.find(item => item.name === name);
+  content.append(node('p', stages[name][1]), node('p', `Execution: ${stage?.status || 'pending'}${stage?.started ? ' · ' + duration(stage.started, stage.finished) : ''}`));
+  content.append(node('p', 'Stage completion records tool execution. Review the run quality requirements separately.'));
+  openDialog('stage-dialog');
+  try {
+    const files = await getFiles(run); if (!$('#stage-dialog').open || $('#stage-heading').textContent !== stages[name][0]) return;
+    const paths = new Set((stage?.outputs || []).map(item => item.path));
+    const prefix = {synth: '1_', floorplan: '2_', place: '3_', cts: '4_', route: '5_', finish: '6_'}[name];
+    const outputs = files.filter(file => paths.has(file.path) || (prefix && /^(logs|reports|results)\//.test(file.path) && file.path.split('/').at(-1).startsWith(prefix)) || (['sim', 'gate_sim'].includes(name) && /\.(vcd|vvp)$/.test(file.path)));
+    const list = node('div', undefined, 'artifacts');
+    content.append(node('h3', 'Saved outputs and native reports'));
+    if (!outputs.length) content.append(node('p', 'No matching saved stage artifacts are available. Pending and failed stages may have no output.'));
+    for (const file of outputs) list.append(artifactLink(run, file)); content.append(list);
+    if (name === 'finish') { const layout = layoutPreview(run, files); if (layout) content.append(layout); }
+    content.append(button('Open full run log', () => { $('#stage-dialog').close(); changeTab('logs'); }));
+    if (outputs.some(file => file.path.endsWith('.vcd'))) content.append(node('p', 'Download the VCD and open it with GTKWave (gtkwave /path/to/waveform.vcd). Use the Waveform tab for bounded signal inspection, or GTKWave for full inspection.'));
+    if (outputs.some(file => file.path.endsWith('.gds'))) content.append(node('p', 'Download GDS and open it in KLayout. GDS generation does not establish physical signoff.'));
+  } catch (error) { content.append(node('p', error.message)); }
+}
 function overview(run, files) {
   const panel = node('div', undefined, 'overview');
   const summary = node('div', undefined, 'result-banner ' + run.status);
@@ -184,6 +235,8 @@ function overview(run, files) {
   else if (run.status === 'interrupted') { title = 'The worker stopped unexpectedly.'; description = 'Your logs and files are saved. Review them before trying again.'; }
   else { title = run.status === 'queued' ? (run.queue_reason ? 'Waiting for the physical flow slot…' : 'Preparing your design…') : 'Your design is running.'; description = 'You can leave this page. The run continues on your computer, and results are saved automatically.'; }
   summary.append(node('h3', title), node('p', description)); panel.append(summary);
+  panel.append(qualityPanel(run));
+  const layout = layoutPreview(run, files); if (layout) panel.append(layout);
   if (['failed', 'interrupted'].includes(run.status)) {
     const failure = node('div', undefined, 'help-note');
     failure.append(node('strong', 'What to do next'), node('p', 'Open Live logs and look for the first error. Check your source files, testbench and tool settings. Run again repeats the saved inputs; to change inputs, edit your project and start a new run.'), button('View error log', () => changeTab('logs'))); panel.append(failure);
@@ -235,26 +288,33 @@ function renderDetail(run) {
       catch (error) { showError(error); } finally { retry.disabled = false; }
     }); retry.id = 'retry-run'; actions.append(retry);
   }
-  const copy = button('Copy run ID', async () => { await copyText(run.id); }); copy.id = 'copy-id'; actions.append(copy); root.append(actions);
+  const copy = button('Copy run ID', async () => { await copyText(run.id); }); copy.id = 'copy-id'; actions.append(copy);
+  for (const [format, label] of [['html', 'HTML report'], ['markdown', 'Markdown report'], ['json', 'JSON report']]) {
+    const link = node('a', label, 'download-link'); link.href = `/api/runs/${run.id}/report?format=${format}`;
+    if (format === 'html') { link.target = '_blank'; link.rel = 'noopener'; } else link.download = ''; actions.append(link);
+  }
+  root.append(actions);
   const pipeline = node('ol', undefined, 'stages'); pipeline.setAttribute('aria-label', 'Run progress');
-  for (const [index, name] of stageList(run.target).entries()) {
+  for (const [index, name] of stageList(run.target, run.stages).entries()) {
     const stage = run.stages.find(s => s.name === name), status = stage?.status || 'pending';
     const item = node('li', undefined, 'stage ' + status);
-    item.append(node('span', status === 'completed' ? '✓' : String(index + 1), 'stage-number'), node('span', stages[name][0]));
+    const inspect = button(stages[name][0], () => inspectStage(run, name), 'stage-inspect');
+    inspect.setAttribute('aria-label', `Inspect ${stages[name][0]} stage`);
+    item.append(node('span', status === 'completed' ? '✓' : String(index + 1), 'stage-number'), inspect);
     item.title = `${stages[name][0]}: ${status}${stage?.finished ? ' · ' + duration(stage.started, stage.finished) : ''}`;
     item.append(node('span', ' — ' + status, 'sr-only'));
     if (status === 'running') item.setAttribute('aria-current', 'step'); pipeline.append(item);
   }
   root.append(pipeline);
   const tabs = node('div', undefined, 'tabs'); tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Run details');
-  for (const [value, label] of [['overview', 'Overview'], ['logs', 'Live logs'], ['artifacts', 'Files'], ['metrics', 'Metrics']]) {
+  for (const [value, label] of [['overview', 'Overview'], ['logs', 'Live logs'], ['artifacts', 'Files'], ['waveform', 'Waveform'], ['metrics', 'Metrics']]) {
     const item = button(label, () => changeTab(value), tab === value ? 'chosen' : '');
     item.id = 'tab-' + value; item.setAttribute('role', 'tab'); item.setAttribute('aria-selected', String(tab === value)); item.setAttribute('aria-controls', 'tab-panel');
     item.tabIndex = tab === value ? 0 : -1;
     item.onkeydown = event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-      event.preventDefault(); const order = ['overview', 'logs', 'artifacts', 'metrics'], current = order.indexOf(value);
-      const next = event.key === 'Home' ? order[0] : event.key === 'End' ? order[3] : order[(current + (event.key === 'ArrowRight' ? 1 : 3)) % 4];
+      event.preventDefault(); const order = ['overview', 'logs', 'artifacts', 'waveform', 'metrics'], current = order.indexOf(value);
+      const next = event.key === 'Home' ? order[0] : event.key === 'End' ? order[order.length - 1] : order[(current + (event.key === 'ArrowRight' ? 1 : order.length - 1)) % order.length];
       changeTab(next); setTimeout(() => $('#tab-' + next)?.focus(), 150);
     };
     tabs.append(item);
@@ -272,7 +332,8 @@ function renderLogText() {
   const pre = $('#log-output'); if (!pre) return;
   const query = logQuery.toLowerCase();
   const text = !followLogs && pausedLogText !== null ? pausedLogText : logText;
-  const rendered = (query ? text.split('\n').filter(line => line.toLowerCase().includes(query)).join('\n') : text) || (query ? 'No matching log lines.' : 'Preparing tools and waiting for output…');
+  const filtered = Boolean(query) || logSeverity !== 'all';
+  const rendered = (filtered ? text.split('\n').filter(line => (!query || line.toLowerCase().includes(query)) && (logSeverity === 'all' || (logSeverity === 'errors' ? /\b(error|fatal|fail(?:ed|ure)?)\b/i : /\b(warn(?:ing)?|error|fatal|fail(?:ed|ure)?)\b/i).test(line))).join('\n') : text) || (filtered ? 'No matching log lines.' : 'Preparing tools and waiting for output…');
   if (pre.textContent !== rendered) pre.textContent = rendered;
   if (followLogs) pre.scrollTop = pre.scrollHeight;
   const count = $('#log-count'); if (count) count.textContent = (query ? `${pre.textContent === 'No matching log lines.' ? 0 : pre.textContent.split('\n').length} matching lines` : 'Updates automatically') + (logTrimmed ? ' · Showing recent output; download the full log to search earlier lines.' : '');
@@ -285,7 +346,10 @@ function logsPanel(panel, run) {
     const follow = node('label', undefined, 'checkbox-label'); const check = node('input'); check.type = 'checkbox'; check.checked = followLogs;
     check.onchange = () => { followLogs = check.checked; pausedLogText = followLogs ? null : logText; renderLogText(); }; follow.append(check, node('span', 'Follow output'));
     const file = {path: 'console.log'}; const download = artifactLink(run, file, '↓ Download log');
-    tools.append(search, follow, download);
+    const severity = node('select'); severity.id = 'log-severity'; severity.setAttribute('aria-label', 'Log severity');
+    for (const [value, label] of [['all', 'All log lines'], ['warnings', 'Warnings and errors'], ['errors', 'Errors only']]) { const option = node('option', label); option.value = value; severity.append(option); }
+    severity.value = logSeverity; severity.onchange = () => { logSeverity = severity.value; renderLogText(); };
+    tools.append(search, severity, follow, download);
     const pre = node('pre'); pre.id = 'log-output'; pre.tabIndex = 0; pre.setAttribute('aria-label', 'Run log output');
     pre.onscroll = () => { if (pre.scrollHeight - pre.scrollTop - pre.clientHeight > 100 && followLogs) { followLogs = false; pausedLogText = logText; check.checked = false; } };
     panel.append(tools, node('small', '', 'muted'), pre); panel.querySelector('small').id = 'log-count';
@@ -301,6 +365,7 @@ function renderFiles(panel, run, files) {
   // Always update the handler with the latest list while a run generates files.
   panel.querySelector('#file-search').oninput = event => { fileQuery = event.target.value; renderFileList(panel, run, files); };
   renderFileList(panel, run, files);
+  if (!panel.querySelector('.layout-preview')) { const layout = layoutPreview(run, files); if (layout) panel.append(layout); }
 }
 function renderFileList(panel, run, files) {
   const list = panel.querySelector('.artifacts');
@@ -326,14 +391,82 @@ function metricsPanel(panel, run) {
   panel.append(table);
   const raw = node('details'); raw.append(node('summary', 'Show raw metrics'), node('pre', JSON.stringify(run.metrics, null, 2))); panel.append(raw);
 }
+async function waveformPanel(panel, run) {
+  panel.append(node('p', 'Loading saved VCD files…'));
+  try {
+    const files = (await getFiles(run)).filter(file => file.path.endsWith('.vcd'));
+    if (!panel.isConnected) return; panel.replaceChildren();
+    if (!files.length) { panel.append(node('p', 'No saved VCD waveform is available for this run. Enable waveform dumping in your testbench.')); return; }
+    const choose = node('select'); choose.id = 'waveform-file'; choose.setAttribute('aria-label', 'Saved VCD waveform');
+    for (const file of files) { const option = node('option', file.path); option.value = file.path; choose.append(option); }
+    const content = node('div'); content.id = 'waveform-content'; panel.append(choose, content);
+    let loadSequence = 0;
+    const load = async () => {
+      const sequence = ++loadSequence;
+      content.replaceChildren(node('p', 'Reading recorded waveform events…'));
+      try {
+        const data = await api(`/api/runs/${run.id}/waveform?path=` + encodeURIComponent(choose.value));
+        if (!panel.isConnected || sequence !== loadSequence) return;
+        content.replaceChildren();
+        const lower = Number(data.start ?? data.min_time ?? 0), upper = Number(data.end ?? data.max_time ?? lower + 1);
+        const unit = typeof data.timescale === 'string' ? data.timescale : JSON.stringify(data.timescale);
+        content.append(node('p', `Timescale: ${unit}. Display uses recorded simulation ticks. ${data.truncated ? 'LIMITED PREVIEW: some signals or events were omitted; download the VCD for full inspection.' : ''}`, data.truncated ? 'import-warning' : 'muted'));
+        const search = node('input'); search.type = 'search'; search.id = 'waveform-search'; search.placeholder = 'Search signals'; search.setAttribute('aria-label', 'Search waveform signals');
+        const signals = node('div', undefined, 'waveform-signals'); const selectedSignals = new Set(data.signals.slice(0, 6).map((signal, index) => index));
+        const controls = node('div', undefined, 'waveform-controls');
+        const numeric = (label, value, id) => { const wrapper = node('label', label), input = node('input'); input.type = 'number'; input.step = 'any'; input.value = value; input.id = id; wrapper.append(input); controls.append(wrapper); return input; };
+        const begin = numeric('Window start (ticks)', lower, 'waveform-start'), end = numeric('Window end (ticks)', Math.max(lower + 1, upper), 'waveform-end');
+        const cursorA = numeric('Cursor A (ticks)', lower, 'waveform-cursor-a'), cursorB = numeric('Cursor B (ticks)', upper, 'waveform-cursor-b');
+        const measurement = node('p'); measurement.id = 'waveform-measurement'; measurement.setAttribute('role', 'status');
+        const drawing = node('div', undefined, 'waveform-drawing'); drawing.id = 'waveform-drawing';
+        const draw = () => {
+          drawing.replaceChildren(); const start = Number(begin.value), stop = Number(end.value);
+          if (!Number.isFinite(start) || !Number.isFinite(stop) || stop <= start) { drawing.append(node('p', 'Window end must be greater than its start.')); return; }
+          measurement.textContent = `Cursor B − A: ${Number(cursorB.value) - Number(cursorA.value)} ticks. Viewing ${selectedSignals.size} signals.`;
+          const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); const height = 45 + selectedSignals.size * 54;
+          svg.setAttribute('viewBox', `0 0 1000 ${height}`); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', `Recorded waveform from ${start} to ${stop} ticks. Cursor difference ${Number(cursorB.value) - Number(cursorA.value)} ticks.`);
+          const make = (tag, attrs, text) => { const item = document.createElementNS(svg.namespaceURI, tag); for (const [key, value] of Object.entries(attrs)) item.setAttribute(key, value); if (text !== undefined) item.textContent = text; svg.append(item); return item; };
+          const x = time => 240 + (Math.max(start, Math.min(stop, time)) - start) / (stop - start) * 740;
+          make('text', {x: 240, y: 18}, String(start)); make('text', {x: 910, y: 18}, String(stop));
+          let row = 0;
+          for (const index of selectedSignals) {
+            const signal = data.signals[index], y = 40 + row++ * 54;
+            make('text', {x: 5, y: y + 16}, signal.name.length > 31 ? signal.name.slice(-31) : signal.name);
+            const events = signal.events || []; let value = 'unknown', previous = start;
+            for (const event of events) {
+              const time = Number(event[0]); if (time <= start) { value = String(event[1]); continue; } if (time > stop) break;
+              segment(previous, time, value); previous = time; value = String(event[1]);
+            }
+            segment(previous, stop, value);
+            function segment(a, b, value) {
+              const left = x(a), right = x(b), binary = Number(signal.width) === 1, yy = binary && value === '1' ? y : y + 25;
+              make('line', {x1: left, x2: right, y1: yy, y2: yy, class: /[xz]|unknown/i.test(value) ? 'wave-unknown' : 'wave-value'});
+              make('line', {x1: left, x2: left, y1: y, y2: y + 25, class: 'wave-value'});
+              if ((!binary || /[xz]|unknown/i.test(value)) && right - left > 24) make('text', {x: left + 4, y: y + 17}, value);
+            }
+          }
+          for (const [cursor, label] of [[Number(cursorA.value), 'A'], [Number(cursorB.value), 'B']]) if (cursor >= start && cursor <= stop) { make('line', {x1: x(cursor), x2: x(cursor), y1: 25, y2: height, class: 'wave-cursor'}); make('text', {x: x(cursor) + 3, y: 32}, label); }
+          drawing.append(svg);
+        };
+        const renderSignals = () => { signals.replaceChildren(); data.signals.forEach((signal, index) => { if (!signal.name.toLowerCase().includes(search.value.toLowerCase())) return; const label = node('label', undefined, 'import-source'), check = node('input'); check.type = 'checkbox'; check.checked = selectedSignals.has(index); check.onchange = () => { if (check.checked && selectedSignals.size >= 16) { check.checked = false; notify('Choose up to 16 signals for the preview.'); return; } check.checked ? selectedSignals.add(index) : selectedSignals.delete(index); draw(); }; label.append(check, node('span', `${signal.name} [${signal.width}]`)); signals.append(label); }); };
+        search.oninput = renderSignals; for (const input of [begin, end, cursorA, cursorB]) input.oninput = draw;
+        controls.append(button('Zoom in', () => { const a = Number(begin.value), b = Number(end.value); begin.value = a + (b-a)/4; end.value = b - (b-a)/4; draw(); }), button('Fit recorded time', () => { begin.value = lower; end.value = Math.max(lower + 1, upper); draw(); }));
+        content.append(search, signals, controls, measurement, drawing, artifactLink(run, {path: choose.value}, 'Download full VCD'));
+        renderSignals(); draw();
+      } catch (error) { content.replaceChildren(node('p', error.message)); }
+    };
+    choose.onchange = load; await load();
+  } catch (error) { panel.replaceChildren(node('p', error.message)); }
+}
 async function renderTab(run) {
   const currentTab = tab, panel = $('.tab-content');
   if (tab === 'logs') { logsPanel(panel, run); return; }
+  if (tab === 'waveform') { if (!panel.childElementCount) await waveformPanel(panel, run); return; }
   if (tab === 'metrics') { if (!panel.childElementCount) metricsPanel(panel, run); return; }
   const files = await getFiles(run);
   if (selected !== run.id || tab !== currentTab || !panel.isConnected) return;
   if (tab === 'artifacts') renderFiles(panel, run, files);
-  else { const key = JSON.stringify([run.status, run.checks, files]); if (panel.dataset.overview !== key) { panel.replaceChildren(overview(run, files)); panel.dataset.overview = key; } }
+  else { const key = JSON.stringify([run.status, run.checks, run.quality, files]); if (panel.dataset.overview !== key) { panel.replaceChildren(overview(run, files)); panel.dataset.overview = key; } }
 }
 function updateElapsed() {
   for (const el of document.querySelectorAll('.elapsed')) el.textContent = `${duration(Number(el.dataset.start), el.dataset.end ? Number(el.dataset.end) : undefined)} ${el.dataset.end ? 'total' : 'elapsed'}`;
@@ -343,7 +476,7 @@ async function refresh() {
   try {
     runs = await api('/api/runs');
     $('#connection').textContent = '● Local workspace'; $('#connection').classList.remove('offline'); $('#connection').title = 'View installed tools';
-    if (requestedRun) { const requested = runs.find(run => run.id === requestedRun); if (requested) { select(requested.id); if (['overview', 'logs', 'artifacts', 'metrics'].includes(requestedTab)) tab = requestedTab; requestedRun = null; updateLocation(); } }
+    if (requestedRun) { const requested = runs.find(run => run.id === requestedRun); if (requested) { select(requested.id); if (['overview', 'logs', 'artifacts', 'waveform', 'metrics'].includes(requestedTab)) tab = requestedTab; requestedRun = null; updateLocation(); } }
     if (!selected || !runs.some(run => run.id === selected)) {
       let previous; try { previous = localStorage.getItem('chipflow.selected'); } catch {}
       select(runs.find(run => run.id === previous)?.id || runs[0]?.id || null);
@@ -413,6 +546,12 @@ $('#compare').onclick = async () => {
   try {
     const [left, right] = [...checked]; const data = await api(`/api/compare?left=${left}&right=${right}`);
     const content = $('#comparison-content'); content.replaceChildren();
+    const compatibility = data.compatibility?.comparisons?.[0];
+    if (compatibility && !compatibility.compatible) {
+      const warning = node('div', undefined, 'error'); warning.setAttribute('role', 'status');
+      warning.append(node('strong', 'Comparison requires review: identities or environments differ or are unavailable. Numeric changes below are raw deltas, not an engineering improvement claim.'));
+      for (const item of compatibility.warnings || []) warning.append(node('p', `${item.field}: ${item.reason}`)); content.append(warning);
+    }
     const table = node('table'); const head = node('tr'); head.append(node('th', 'Result'), node('th', `${data.left.name} · ${left.slice(0, 6)}`), node('th', `${data.right.name} · ${right.slice(0, 6)}`), node('th', 'Change')); table.append(head);
     const row = (label, a, b, delta = '—') => { const item = node('tr'); const heading = node('th', label); heading.scope = 'row'; item.append(heading, node('td', a), node('td', b), node('td', delta)); table.append(item); };
     row('Run stage', stages[data.left.target][0], stages[data.right.target][0]);
@@ -446,6 +585,7 @@ function populateEditor(project = null, inputs = []) {
   defaults.files = pairs(Object.fromEntries(Object.entries(project?.orfs_files || {}).map(([name, files]) => [name, inputs.filter(input => input.kind === 'ORFS file: ' + name).map(input => input.path).length ? inputs.filter(input => input.kind === 'ORFS file: ' + name).map(input => input.path) : files])));
   for (const [key, value] of Object.entries(defaults)) $('#p-' + key).value = value;
   $('#project-heading').textContent = project ? 'Edit a project copy' : 'Create a project';
+  $('#project-policy-hint').textContent = project ? 'The existing quality policy and advanced settings are preserved in the new copy.' : $('#experience').value === 'standard' ? 'Standard quality policy: verification is required before physical implementation. Add a self-checking testbench. Requirements remain visible in run results.' : 'Learning quality policy: review warnings and engineering checks separately from execution. Expert YAML can configure additional requirements.';
   const extra = project && (project.tcl || Object.keys(project.orfs_variables || {}).length || Object.keys(project.orfs_files || {}).length); $('#project-dialog .advanced').open = $('#experience').value === 'expert' || Boolean(extra);
   clockRequirements(); openDialog('project-dialog'); $('#p-name').focus();
 }
@@ -475,6 +615,7 @@ $('#project-form').onsubmit = async event => {
     const project = {...editorBase, name: values.name, top: values.top, rtl: lines(values.rtl), orfs: values.orfs, platform: values.platform,
       clocks: values.clock && values.period ? [{port: values.clock, period_ns: Number(values.period)}, ...(editorBase?.clocks.slice(1) || [])] : [],
       sdc: values.sdc || null, include_dirs: lines(values.includes), threads: Number(values.threads), physical,
+      quality: editorBase?.quality || {policy: $('#experience').value === 'standard' ? 'standard' : 'learning'},
       simulation: values.tb ? {...editorBase?.simulation, top: values.simtop, testbench: lines(values.tb), pass_marker: values.marker || 'PASS', cell_models: lines(values.models)} : null};
     const hooks = parseAssignments(values.hooks, 'Tcl hooks'), parameters = parseAssignments(values.parameters, 'Tcl parameters');
     if (!values.tcldir && (Object.keys(hooks).length || Object.keys(parameters).length)) throw new Error('Choose a Tcl bundle directory for your scripts and parameters.');
@@ -552,7 +693,7 @@ function parseAssignments(text, label) {
 }
 function setExperience() {
   const expert = $('#experience').value === 'expert';
-  $('#learning').hidden = expert; $('.welcome').hidden = expert;
+  $('#learning').hidden = $('#experience').value !== 'learn'; $('.welcome').hidden = $('#experience').value !== 'learn';
   $('#edit-yaml').hidden = !expert;
   try { localStorage.setItem('chipflow.experience', $('#experience').value); } catch {}
 }
@@ -669,5 +810,42 @@ $('#yaml-form').onsubmit = async event => {
     notify('Saved a new project copy with the complete configuration.'); await checkProject();
   } catch (error) { showError(error, $('#yaml-dialog').open ? '#yaml-error' : '#error'); }
   finally { save.disabled = false; }
+};
+function applyTheme() {
+  const setting = $('#theme').value;
+  const dark = setting === 'dark' || (setting === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  try { localStorage.setItem('chipflow.theme', setting); } catch {}
+}
+try { $('#theme').value = localStorage.getItem('chipflow.theme') || 'system'; } catch {}
+$('#theme').onchange = applyTheme;
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme); applyTheme();
+$('#import-project').onclick = () => { openDialog('import-dialog'); $('#import-directory').focus(); };
+$('#import-form').onsubmit = async event => {
+  event.preventDefault(); const submit = $('#import-form button'); submit.disabled = true;
+  message('#import-error', ''); $('#import-results').replaceChildren();
+  try {
+    const result = await api('/api/import?directory=' + encodeURIComponent($('#import-directory').value.trim()));
+    const root = $('#import-results');
+    root.append(node('p', 'Select files below, then review their order in the project form. Header/include files should be configured through include folders.'));
+    for (const warning of result.warnings || []) root.append(node('p', warning, 'import-warning'));
+    const selection = [];
+    for (const file of result.files || []) {
+      const label = node('label', undefined, 'import-source'); const check = node('input'); check.type = 'checkbox';
+      check.dataset.path = file.path; label.append(check, node('span', file.path)); root.append(label); selection.push(check);
+    }
+    const label = node('label', 'Top module (confirm explicitly)'); const top = node('select'); top.setAttribute('aria-label', 'Imported top module');
+    const blank = node('option', 'Choose a top module'); blank.value = ''; top.append(blank);
+    for (const module of result.modules || []) { const option = node('option', `${module.name} — ${module.path}:${module.line}`); option.value = module.name; top.append(option); } label.append(top); root.append(label);
+    if (!(result.files || []).length) root.append(node('p', 'No supported RTL files found. Choose another directory.'));
+    const use = button('Review selected sources', () => {
+      const sources = selection.filter(check => check.checked).map(check => check.dataset.path);
+      if (!sources.length || !top.value) { message('#import-error', 'Choose at least one source and explicitly select its top module.'); return; }
+      $('#import-dialog').close(); populateEditor(); $('#p-top').value = top.value; $('#p-rtl').value = sources.join('\n');
+      $('#p-name').value = top.value; $('#p-includes').value = (result.includes || []).filter(item => typeof item === 'string').join('\n');
+      notify('Review source order, include folders, testbench and clock assumptions before saving. Discovery does not verify compilation.');
+    }); use.disabled = !(result.files || []).length; root.append(use);
+  } catch (error) { showError(error, '#import-error'); }
+  finally { submit.disabled = false; }
 };
 stageHelp(); setup(); loadGuide(); refresh(); setInterval(refresh, 1000);

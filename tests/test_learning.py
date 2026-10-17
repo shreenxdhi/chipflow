@@ -47,6 +47,9 @@ def expert(tmp_path, monkeypatch):
 def test_expert_bundle_and_file_overrides_are_preserved_on_retry(expert, tmp_path, monkeypatch):
     config, flow, macro = expert
     monkeypatch.setattr("chipflow.engine.subprocess.Popen", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "chipflow.provenance.capture", lambda *a, **k: {"evidence": "application-test-double"}
+    )
     store = Store(tmp_path / "runs")
     run = store.start(config, "finish")
     directory = store.directory(run["id"])
@@ -131,6 +134,9 @@ def test_bundle_and_file_overrides_survive_backup_restore(expert, tmp_path, monk
 
     config, flow, macro = expert
     monkeypatch.setattr("chipflow.engine.subprocess.Popen", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "chipflow.provenance.capture", lambda *a, **k: {"evidence": "application-test-double"}
+    )
     store = Store(tmp_path / "runs")
     run = store.start(config)
     run["status"] = "completed"

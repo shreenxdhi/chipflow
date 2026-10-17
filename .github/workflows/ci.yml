@@ -24,6 +24,17 @@ jobs:
       - run: python -m pip install --constraint requirements-runtime.txt -e '.[test]'
       - run: python -m pytest -q
       - run: node --check chipflow/static/app.js
+  native-verification:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y iverilog verilator yosys make g++
+      - run: python -m pip install --constraint requirements-runtime.txt -e '.[test,verification,physical]'
+      - name: Run real verification and output inspection integrations
+        run: python -m pytest -q tests/test_verification_adapters.py tests/test_reference_designs.py tests/test_inspection_physical.py
   distribution:
     runs-on: ubuntu-24.04
     steps:
@@ -51,7 +62,7 @@ jobs:
         with:
           python-version: '3.14'
       - run: sudo apt-get update && sudo apt-get install -y iverilog make
-      - run: python -m pip install --constraint requirements-runtime.txt -e '.[test,browser-test]'
+      - run: python -m pip install --constraint requirements-runtime.txt -e '.[test,browser-test,physical]'
       - run: python -m playwright install --with-deps chromium
       - name: Exercise the browser in a fresh workspace
         env:
@@ -62,6 +73,7 @@ jobs:
           trap 'kill "$server_pid"' EXIT
           python -c 'import time,urllib.request; time.sleep(2); urllib.request.urlopen("http://127.0.0.1:8765/api/health",timeout=10)'
           python tests/browser_smoke.py
+          python tests/browser_workspace.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: failure()
         with:

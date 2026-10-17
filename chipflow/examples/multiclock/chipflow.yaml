@@ -1,0 +1,21 @@
+name: multiclock
+top: multiclock
+rtl:
+- multiclock.v
+platform: nangate45
+clocks:
+- port: clk_a
+  period_ns: 10
+- port: clk_b
+  period_ns: 14
+simulation:
+  top: tb
+  testbench:
+  - tb.v
+  pass_marker: PASS
+physical:
+  DIE_AREA: 0 0 100 100
+  CORE_AREA: 10 10 90 90
+  PLACE_DENSITY: 0.3
+  TNS_END_PERCENT: 100
+  ADDER_MAP_FILE: ''

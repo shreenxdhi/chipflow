@@ -15,6 +15,12 @@ from pathlib import Path, PurePosixPath
 from .engine import TERMINAL, file_hash, verify_inputs
 from .storage import locked, read_state, save
 
+# Policy limits are module constants so deployments/tests can choose tighter budgets.
+MAX_ARCHIVE_MEMBERS = 200000
+MAX_ARCHIVE_METADATA_BYTES = 64 * 1024 * 1024
+MAX_MEMBER_PATH_BYTES = 4096
+MAX_BACKUP_METADATA_BYTES = 16 * 1024 * 1024
+
 
 def backup(store, destination: Path):
     destination = destination.expanduser().resolve()
@@ -81,12 +87,36 @@ def _restore(store, source: Path):
                 "Restore requires an empty run directory; existing history is never overwritten"
             )
         with tarfile.open(source, "r:gz") as archive:
-            members = archive.getmembers()
+            members = []
+            metadata_bytes = 0
+            total_bytes = 0
+            available_bytes = shutil.disk_usage(store.root.parent).free * 0.95
+            for item in archive:
+                path_bytes = len(item.name.encode("utf-8", "surrogateescape"))
+                metadata_bytes += (
+                    512 + path_bytes + len(item.linkname.encode("utf-8", "surrogateescape"))
+                )
+                if (
+                    len(members) >= MAX_ARCHIVE_MEMBERS
+                    or path_bytes > MAX_MEMBER_PATH_BYTES
+                    or metadata_bytes > MAX_ARCHIVE_METADATA_BYTES
+                ):
+                    raise ValueError("Backup exceeds archive metadata limits")
+                if item.name == "backup.json" and item.size > MAX_BACKUP_METADATA_BYTES:
+                    raise ValueError("Missing or oversized backup metadata")
+                total_bytes += item.size
+                if total_bytes > available_bytes:
+                    raise ValueError("Insufficient free space to restore this backup")
+                members.append(item)
             names = [item.name for item in members]
             if len(names) != len(set(names)):
                 raise ValueError("Backup contains duplicate paths")
             metadata = next((item for item in members if item.name == "backup.json"), None)
-            if metadata is None or not metadata.isfile() or metadata.size > 16 * 1024 * 1024:
+            if (
+                metadata is None
+                or not metadata.isfile()
+                or metadata.size > MAX_BACKUP_METADATA_BYTES
+            ):
                 raise ValueError("Missing or oversized backup metadata")
             manifest = json.load(archive.extractfile(metadata))
             if (

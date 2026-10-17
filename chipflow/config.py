@@ -1,11 +1,14 @@
 import re
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .customization import TCL_POINTS, protected, validate_variable
 from .environment import discover_orfs
+from .execution import ExecutionConfig, ReproducibilityConfig
+from .quality import QualityConfig
 
 NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 
@@ -28,10 +31,28 @@ class Clock(Strict):
 
 class Simulation(Strict):
     top: str
-    testbench: list[str] = Field(min_length=1)
+    testbench: list[str] = []
+    backend: Literal["icarus", "verilator", "cocotb"] = "icarus"
+    cocotb_simulator: Literal["icarus", "verilator"] = "icarus"
+    python_modules: list[str] = []
+    python_directory: str | None = None
+    seed: int | None = Field(default=None, ge=0, le=2147483647)
     pass_marker: str = "PASS"
     timeout_seconds: int = Field(default=60, ge=1, le=86400)
     cell_models: list[str] = []
+
+    @model_validator(mode="after")
+    def backend_inputs(self):
+        if self.backend == "cocotb":
+            if not self.python_modules or not self.python_directory:
+                raise ValueError("Cocotb requires python_modules and python_directory")
+            if any(
+                not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", name) for name in self.python_modules
+            ):
+                raise ValueError("Cocotb modules must be Python module names")
+        elif not self.testbench:
+            raise ValueError("A testbench source list is required")
+        return self
 
     @field_validator("top")
     @classmethod
@@ -43,9 +64,19 @@ class Simulation(Strict):
     @field_validator("pass_marker")
     @classmethod
     def marker(cls, value):
-        if not value.strip():
-            raise ValueError("a nonempty explicit test pass marker is required")
+        if not value.strip() or len(value) > 4096 or any(c in value for c in "\r\n\0"):
+            raise ValueError(
+                "a nonempty single-line test pass marker of at most 4096 characters is required"
+            )
         return value
+
+
+class VerificationSettings(Strict):
+    lint: bool = False
+    equivalence: bool = False
+    timeout_seconds: int = Field(default=120, ge=1, le=86400)
+    libraries: list[str] = []
+    netlist: str | None = None
 
 
 class TclConfig(Strict):
@@ -96,6 +127,10 @@ class Project(Strict):
     save_images: bool = False
     threads: int = Field(default=2, ge=1, le=256)
     timeout_seconds: int = Field(default=3600, ge=1, le=604800)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    reproducibility: ReproducibilityConfig = Field(default_factory=ReproducibilityConfig)
+    verification: VerificationSettings = Field(default_factory=VerificationSettings)
 
     @field_validator("name", "top", "platform")
     @classmethod

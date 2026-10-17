@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -90,6 +90,55 @@ def create_app(root: Path | str = ".chipflow/runs"):
     @app.get("/api/setup")
     def setup_report():
         return assess(versions=False)
+
+    @app.get("/api/import")
+    def source_import(directory: str):
+        from .importing import discover_sources
+
+        return discover_sources(directory)
+
+    @app.get("/api/runs/{run_id}/report")
+    def report(run_id: str, format: str = "html"):
+        from .reports import build_report, render_report
+
+        if format not in {"json", "markdown", "html"}:
+            raise ValueError("Choose json, markdown or html report format")
+        result = build_report(store, run_id)
+        if format == "json":
+            return result
+        return Response(
+            render_report(result, format),
+            media_type="text/html" if format == "html" else "text/markdown",
+        )
+
+    @app.get("/api/runs/{run_id}/waveform")
+    def waveform(
+        run_id: str,
+        path: str = "waveform.vcd",
+        start: int = Query(default=0, ge=0),
+        end: int | None = Query(default=None, ge=0),
+        signals: str | None = None,
+    ):
+        from .waveforms import read_waveform
+
+        artifact = store.artifact(run_id, path)
+        if artifact.suffix.lower() != ".vcd":
+            raise ValueError("The interactive viewer supports VCD files")
+        return read_waveform(
+            artifact, start=start, end=end, signals=signals.split(",") if signals else None
+        )
+
+    @app.get("/api/runs/{run_id}/diagnostics")
+    def diagnostics(run_id: str):
+        from .diagnostics import diagnose_log
+
+        return diagnose_log(store.artifact(run_id, "console.log"))
+
+    @app.get("/api/runs/{run_id}/constraints")
+    def constraints(run_id: str):
+        import json
+
+        return json.loads(store.artifact(run_id, "constraints.json").read_text())
 
     @app.get("/api/guide")
     def guide():

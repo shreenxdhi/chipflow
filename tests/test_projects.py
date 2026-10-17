@@ -107,6 +107,9 @@ def test_project_api_and_preflight_block_invalid_run(local_project):
 def test_retry_uses_saved_inputs_after_original_changes(local_project, monkeypatch):
     path, config = local_project
     monkeypatch.setattr("chipflow.engine.subprocess.Popen", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "chipflow.provenance.capture", lambda *a, **k: {"evidence": "application-test-double"}
+    )
     app = create_app(path.parent / "state" / "runs")
     store = app.state.store
     original = store.start(path)
