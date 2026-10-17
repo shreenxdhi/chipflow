@@ -210,7 +210,7 @@ function overview(run, files) {
   }
   return panel;
 }
-function changeTab(value) { tab = value; updateLocation(); lastState = ''; const run = runs.find(r => r.id === selected); if (run) { renderDetail(run); renderTab(run).catch(error => showError(error)); } refresh(); }
+function changeTab(value) { tab = value; updateLocation(); lastState = ''; const run = runs.find(r => r.id === selected); if (run) { renderDetail(run); lastState = JSON.stringify(run) + tab; renderTab(run).catch(error => showError(error)); } refresh(); }
 function renderDetail(run) {
   const focused = $('#detail').contains(document.activeElement) ? document.activeElement.id : null;
   const root = $('#detail'); root.replaceChildren();

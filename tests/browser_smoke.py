@@ -190,7 +190,15 @@ with sync_playwright() as p:
     expect(page.locator("#log-count")).to_contain_text("Showing recent output", timeout=30000)
     assert len(page.locator("#log-output").inner_text()) <= 2 * 1024 * 1024
     assert (run_folder / "console.log").stat().st_size > 2 * 1024 * 1024
+    # Hold polling so the tab can render before its next unchanged refresh.
+    page.wait_for_function("() => { if (busy) return false; busy = true; return true; }")
     page.get_by_role("tab", name="Files", exact=True).click()
+    expect(page.locator("#file-search")).to_be_visible()
+    page.evaluate("window.fileSearchBeforeRefresh = document.querySelector('#file-search')")
+    page.evaluate("busy = false; refresh()")
+    assert page.evaluate(
+        "window.fileSearchBeforeRefresh === document.querySelector('#file-search')"
+    )
     page.get_by_role("searchbox", name="Search output files").fill(".vcd")
     expect(page.locator(".artifacts")).to_contain_text("Waveform")
     expect(page.locator(".artifacts")).not_to_contain_text("project.json")
