@@ -32,7 +32,7 @@ def terminate(process):
     process.wait()
 
 
-def supervise(argv, parent_fd, timeout):
+def supervise(argv, parent_fd, timeout, container_runtime=None, container_name=None):
     stopping = False
 
     def stop(signum, frame):
@@ -62,6 +62,10 @@ def supervise(argv, parent_fd, timeout):
     finally:
         if process is not None:
             terminate(process)
+        if container_runtime and container_name:
+            from .execution import cleanup_container
+
+            cleanup_container(container_runtime, container_name)
         os.close(parent_fd)
 
 
@@ -69,11 +73,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--parent-fd", type=int, required=True)
     parser.add_argument("--timeout", type=float, required=True)
+    parser.add_argument("--container-runtime")
+    parser.add_argument("--container-name")
     parser.add_argument("argv", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
     try:
-        return supervise(argv, args.parent_fd, args.timeout)
+        return supervise(
+            argv, args.parent_fd, args.timeout, args.container_runtime, args.container_name
+        )
     except OSError as exc:
         print(f"Chipflow: could not execute tool: {exc}", file=sys.stderr)
         return 127
