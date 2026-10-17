@@ -228,3 +228,16 @@ See [contributing](CONTRIBUTING.md), [validation](docs/VALIDATION.md),
 
 Chipflow is [Apache-2.0 licensed](LICENSE). EDA tools, cell libraries, and PDKs retain
 their own licenses and are not distributed in the package.
+
+## Engineering workspace development
+
+The engineering workspace branch adds explicit quality policies, toolchain manifests,
+real verification adapters, guided constraint generation, traceable reports,
+bounded experiments and waveform/layout inspection. This work does not declare a
+2.0 stable release or qualified physical signoff.
+
+Start with the [engineering CLI guide](docs/ENGINEERING_CLI.md),
+[architecture and compatibility](docs/ENGINEERING_ARCHITECTURE.md),
+[feature/acceptance tracker](docs/ENGINEERING_TRACKER.md), and
+[implementation evidence](docs/IMPLEMENTATION_REPORT.md).
+The tracker explicitly records missing capabilities and platform qualifications.
