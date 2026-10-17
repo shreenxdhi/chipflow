@@ -15,7 +15,9 @@ chipflow verify --target finish
 ```
 
 Homebrew source builds can take several minutes. Manager installation does not
-install EDA binaries or licensed platform data. Setup suggests missing tools;
+install EDA binaries or licensed platform data. Run `chipflow setup --install` to
+choose and approve a tool installer, or `--check` for read-only checks. See the
+[installation guide](INSTALLATION.md) for variants and their system changes;
 select OpenROAD and Yosys from the same ORFS toolchain revision, then save paths:
 
 ```sh

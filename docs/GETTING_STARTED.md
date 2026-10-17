@@ -7,7 +7,9 @@ chipflow quickstart first-chip
 ```
 
 This checks Icarus Verilog before creating files. If a prerequisite is missing,
-follow the printed installation suggestion and run the same command again.
+choose an installation variant when quickstart prompts you, or run
+`chipflow setup --target sim --install`. Approve the displayed plan, then rerun
+quickstart. See [installation options](INSTALLATION.md).
 On success, you have a counter, its testbench, a configuration, a guide, and a
 saved simulation with a waveform. Read `first-chip/counter.v` and `tb.v`: the
 hardware counts, and the testbench checks reset and counting behavior.

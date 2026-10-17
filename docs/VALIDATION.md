@@ -94,3 +94,26 @@ and router results in the table unchanged. KLayout opened the expert counter and
 DMA layouts and confirmed the expected top cells (33 and 129 cells respectively).
 The native toolchain is described above. Release CI repeats the manager tests across supported hosts
 and Python versions; the public tap validates the installed formula separately.
+
+## Unreleased interactive tool installation
+
+The local suite passed 109 tests, including installation consent/decline,
+noninteractive behavior, distribution variants, failed-command handling,
+custom-path precedence, pinned source plans, local package identity checks, and
+prebuilt-suite checksum/extraction failures. Installer subprocess integration uses
+a fake package manager to verify installation and subsequent real version probes
+without changing system packages.
+
+On Debian 13 x86-64 without sudo, the interactive installer downloaded the real
+OSS CAD Suite `2026-10-17`, verified its upstream SHA-256, extracted it into a new
+user directory, saved its executable path, and passed `chipflow verify --target sim`
+with the bundled self-checking counter. The isolated installed wheel also passed
+simulation and dashboard checks with those binaries on PATH. Wheel/source content
+checks and metadata validation passed.
+
+The browser smoke passed installation-variant selection, rechecking without
+replacing the chosen project, and the existing learning, simulation, log/file
+search, retry/cancel, waveform download and mobile checks. Native package-manager
+and privileged full ORFS source installations were not performed on this host;
+those plans have automated tests and still require acceptance on their target OS.
+This change does not add new physical-flow or native macOS/Windows validation.
